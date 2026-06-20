@@ -1,8 +1,49 @@
 # WQ Alpha Research Skill
 
-WorldQuant BRAIN alpha research skill for designing WQ Alpha expressions, searching fields, diagnosing simulation failures, checking IS metrics, managing self-correlation, and organizing low-correlation alpha portfolios.
+A self-evolving WorldQuant BRAIN alpha research skill. It helps agents design WQ Alpha expressions, search fields, diagnose simulation failures, check IS metrics, manage self-correlation, and turn each BRAIN interaction into reusable research rules.
 
-This repository is a reusable agent skill, not a credential bundle. Keep all account credentials and personal alpha records local.
+The core idea is simple: do not let alpha research stay as scattered one-off prompts. Use the skill to build alphas, test them, inspect failures, compare daily-return correlations, and then distill the useful lessons back into `SKILL.md`.
+
+This repository is a reusable agent skill, not a credential bundle. Keep all account credentials, raw alpha IDs, PnL records, and private candidate expressions local.
+
+## Why This Skill Exists
+
+WQ Alpha mining is not only about writing more expressions. The bottleneck is usually the research loop:
+
+- finding usable fields fast enough;
+- avoiding repeated low-Sharpe templates;
+- controlling turnover before submission;
+- checking SELF_CORRELATION against existing ACTIVE alphas;
+- preserving lessons from failed simulations instead of rediscovering them later.
+
+This skill packages that loop into an agent-readable playbook plus scripts. It gives the agent local field context, practical expression templates, IS failure diagnostics, submission checks, and a self-evolution mechanism for turning new runs into better future behavior.
+
+## Mining Effect
+
+The current playbook is built around USA TOP3000 delay=1 and includes a local snapshot of 4,367 BRAIN data fields. It has already distilled several practical mining rules:
+
+- Fundamental fields are usually the strongest starting point; `group_rank + ts_rank` with `SUBINDUSTRY` neutralization is the default baseline.
+- Analyst expectation fields are useful but need more turnover control, usually via modest decay and industry/subindustry neutralization.
+- Pure technical signals fail more often unless decay is high or they are mixed with slower fundamental signals.
+- Fitness failures are often turnover problems in disguise; decay and signal mixing are the first levers to check.
+- Self-correlation must be measured on daily PnL changes, not cumulative PnL curves.
+- Changing windows, weights, or neutralization rarely creates truly low-correlation alphas by itself; low correlation usually needs a different data source or economic logic.
+
+The goal is not to promise a fixed Sharpe or submission pass rate. The value is a faster, cleaner alpha mining loop: fewer invalid-field attempts, less repeated correlation failure, better default templates, and a growing memory of what worked or failed.
+
+## Self-Evolution Loop
+
+`scripts/evolve_skill.py` is the feedback engine. After simulations, submissions, or status checks, it can fetch the user's alpha list, compare new/changed alphas with the local snapshot, compute daily-return correlations against ACTIVE alphas, and generate a Markdown lesson snippet.
+
+Recommended loop:
+
+1. Generate or modify candidate expressions from `SKILL.md`.
+2. Simulate and inspect IS checks on BRAIN.
+3. Pull all ACTIVE alphas and compare daily-return correlation.
+4. Run `python scripts/evolve_skill.py` to preview new lessons.
+5. Review the output manually.
+6. Run `python scripts/evolve_skill.py --apply` only for local/private updates.
+7. Publish only sanitized general rules, never raw account-linked records.
 
 ## Contents
 
@@ -25,7 +66,7 @@ wq-alpha-research/
 - Diagnose low Sharpe, low Fitness, high Turnover, concentrated weights, and sub-universe failures.
 - Compare candidate alphas against existing ACTIVE alphas using daily-return correlation.
 - Automate simulation/submission workflows with explicit post-submit status checks.
-- Keep local alpha research notes evolving without committing private records.
+- Evolve the skill from local alpha research notes without committing private records.
 
 ## Quick Start
 
@@ -75,7 +116,7 @@ Preview skill evolution output without modifying files:
 python scripts/evolve_skill.py
 ```
 
-Apply updates to local `SKILL.md` and `alpha_db.json`:
+Apply updates to local `SKILL.md` and `alpha_db.json` after reviewing the preview:
 
 ```bash
 python scripts/evolve_skill.py --apply
@@ -87,7 +128,7 @@ Run the batch submission example:
 python scripts/submit_batch.py
 ```
 
-The scripts require `requests` and `numpy`.
+The scripts require `requests` and `numpy`. `alpha_db.json` is a local memory file and is intentionally ignored by git.
 
 ## Safety Notes
 
