@@ -7,6 +7,7 @@ mining_state.json
 mining_report.json
 candidates.json
 *.pdf
+papers/
 *.pyc
 __pycache__/
 .DS_Store
