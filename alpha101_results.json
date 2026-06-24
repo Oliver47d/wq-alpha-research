@@ -1,0 +1,344 @@
+[
+  {
+    "name": "overnight_reversal",
+    "expression": "rank(-(close / open - 1))",
+    "decay": 20,
+    "neutralization": "INDUSTRY",
+    "alpha_id": "wpRe5oEd",
+    "sharpe": 1.21,
+    "fitness": 0.74,
+    "turnover": 0.4118,
+    "returns": 0.1546,
+    "drawdown": 0.1393,
+    "checks_failed": [
+      "LOW_SHARPE",
+      "LOW_FITNESS"
+    ],
+    "submission": {
+      "submitted": false,
+      "reason": "metrics_threshold"
+    }
+  },
+  {
+    "name": "corr_reversal_volume",
+    "expression": "-ts_corr(rank(close / open - 1), rank(ts_delta(volume, 5)), 10)",
+    "decay": 20,
+    "neutralization": "INDUSTRY",
+    "alpha_id": "RRprNoee",
+    "sharpe": 0.65,
+    "fitness": 0.24,
+    "turnover": 0.1494,
+    "returns": 0.0203,
+    "drawdown": 0.0535,
+    "checks_failed": [
+      "LOW_SHARPE",
+      "LOW_FITNESS"
+    ],
+    "submission": {
+      "submitted": false,
+      "reason": "metrics_threshold"
+    }
+  },
+  {
+    "name": "volume_weighted_reversal",
+    "expression": "rank(-(close / open - 1) * log(volume))",
+    "sim": {
+      "sim_id": "1HGKRg7sZ4V2bEF1b0LoYw9K",
+      "status": "TIMEOUT"
+    }
+  },
+  {
+    "name": "mean_reversion_zscore",
+    "expression": "rank(-(close - ts_mean(close, 20)) / ts_std_dev(close, 20))",
+    "error": "('Connection aborted.', TimeoutError(60, 'Operation timed out'))"
+  },
+  {
+    "name": "low_volatility",
+    "expression": "rank(-ts_std_dev(returns, 20))",
+    "decay": 5,
+    "neutralization": "INDUSTRY",
+    "alpha_id": "omKYlm6b",
+    "sharpe": 0.12,
+    "fitness": 0.05,
+    "turnover": 0.0743,
+    "returns": 0.0247,
+    "drawdown": 0.6976,
+    "checks_failed": [
+      "LOW_SHARPE",
+      "LOW_FITNESS",
+      "LOW_SUB_UNIVERSE_SHARPE"
+    ],
+    "submission": {
+      "submitted": false,
+      "reason": "metrics_threshold"
+    }
+  },
+  {
+    "name": "intraday_range_reversal",
+    "expression": "rank(-(high / low - 1))",
+    "decay": 20,
+    "neutralization": "INDUSTRY",
+    "alpha_id": "blL9q32m",
+    "sharpe": 0.07,
+    "fitness": 0.03,
+    "turnover": 0.0883,
+    "returns": 0.0171,
+    "drawdown": 0.8228,
+    "checks_failed": [
+      "LOW_SHARPE",
+      "LOW_FITNESS",
+      "LOW_SUB_UNIVERSE_SHARPE"
+    ],
+    "submission": {
+      "submitted": false,
+      "reason": "metrics_threshold"
+    }
+  },
+  {
+    "name": "momentum_reversal_mix",
+    "expression": "0.5 * rank(ts_rank(returns, 10)) + 0.5 * rank(-(close / open - 1))",
+    "decay": 15,
+    "neutralization": "INDUSTRY",
+    "alpha_id": "P0p13wvM",
+    "sharpe": 0.56,
+    "fitness": 0.24,
+    "turnover": 0.3175,
+    "returns": 0.0571,
+    "drawdown": 0.1748,
+    "checks_failed": [
+      "LOW_SHARPE",
+      "LOW_FITNESS"
+    ],
+    "submission": {
+      "submitted": false,
+      "reason": "metrics_threshold"
+    }
+  },
+  {
+    "name": "volume_breakout_reversal",
+    "expression": "rank(ts_delta(volume, 5) / ts_std_dev(volume, 20)) * rank(-returns)",
+    "decay": 20,
+    "neutralization": "INDUSTRY",
+    "alpha_id": "YPpA05wA",
+    "sharpe": 1.18,
+    "fitness": 0.65,
+    "turnover": 0.3944,
+    "returns": 0.1179,
+    "drawdown": 0.0713,
+    "checks_failed": [
+      "LOW_SHARPE",
+      "LOW_FITNESS"
+    ],
+    "submission": {
+      "submitted": false,
+      "reason": "metrics_threshold"
+    }
+  },
+  {
+    "name": "roe_trend",
+    "expression": "group_rank(ts_rank(operating_income / equity, 126), subindustry)",
+    "decay": 0,
+    "neutralization": "SUBINDUSTRY",
+    "alpha_id": "zq9Wm0kK",
+    "sharpe": 2.01,
+    "fitness": 1.32,
+    "turnover": 0.063,
+    "returns": 0.0541,
+    "drawdown": 0.0295,
+    "checks_failed": [],
+    "submission": {
+      "submitted": true,
+      "status": "ACTIVE",
+      "alpha": {
+        "id": "zq9Wm0kK",
+        "type": "REGULAR",
+        "author": "SD54928",
+        "settings": {
+          "instrumentType": "EQUITY",
+          "region": "USA",
+          "universe": "TOP3000",
+          "delay": 1,
+          "decay": 0,
+          "neutralization": "SUBINDUSTRY",
+          "truncation": 0.08,
+          "pasteurization": "ON",
+          "unitHandling": "VERIFY",
+          "nanHandling": "ON",
+          "maxTrade": "OFF",
+          "maxPosition": "OFF",
+          "language": "FASTEXPR",
+          "visualization": false,
+          "startDate": "2019-01-01",
+          "endDate": "2023-12-31"
+        },
+        "regular": {
+          "code": "group_rank(ts_rank(operating_income / equity, 126), subindustry)",
+          "description": null,
+          "operatorCount": 3
+        },
+        "dateCreated": "2026-06-23T10:40:28-04:00",
+        "dateSubmitted": "2026-06-23T10:40:29-04:00",
+        "dateModified": "2026-06-23T10:40:28-04:00",
+        "name": null,
+        "favorite": false,
+        "hidden": false,
+        "color": null,
+        "category": null,
+        "tags": [],
+        "classifications": [
+          {
+            "id": "DATA_USAGE:SINGLE_DATA_SET",
+            "name": "Single Data Set Alpha"
+          },
+          {
+            "id": "REGULAR:REGULAR",
+            "name": "Regular Alpha"
+          }
+        ],
+        "grade": "AVERAGE",
+        "stage": "OS",
+        "status": "ACTIVE",
+        "is": {
+          "pnl": 2676579,
+          "bookSize": 20000000,
+          "longCount": 1473,
+          "shortCount": 1532,
+          "turnover": 0.063,
+          "returns": 0.0541,
+          "drawdown": 0.0295,
+          "margin": 0.001718,
+          "sharpe": 2.01,
+          "fitness": 1.32,
+          "startDate": "2019-01-01",
+          "selfCorrelation": 0.0,
+          "prodCorrelation": 0.0,
+          "checks": [
+            {
+              "name": "LOW_SHARPE",
+              "result": "PASS",
+              "limit": 1.25,
+              "value": 2.01
+            },
+            {
+              "name": "LOW_FITNESS",
+              "result": "PASS",
+              "limit": 1.0,
+              "value": 1.32
+            },
+            {
+              "name": "LOW_TURNOVER",
+              "result": "PASS",
+              "limit": 0.01,
+              "value": 0.063
+            },
+            {
+              "name": "HIGH_TURNOVER",
+              "result": "PASS",
+              "limit": 0.7,
+              "value": 0.063
+            },
+            {
+              "name": "CONCENTRATED_WEIGHT",
+              "result": "PASS"
+            },
+            {
+              "name": "LOW_SUB_UNIVERSE_SHARPE",
+              "result": "PASS",
+              "limit": 0.87,
+              "value": 1.5
+            },
+            {
+              "name": "MATCHES_COMPETITION",
+              "result": "PASS",
+              "competitions": [
+                {
+                  "id": "challenge",
+                  "name": "Challenge"
+                }
+              ]
+            }
+          ]
+        },
+        "os": {
+          "startDate": "2024-01-01",
+          "osISSharpeRatio": null,
+          "preCloseSharpeRatio": null,
+          "checks": [
+            {
+              "name": "SHARPE",
+              "result": "PENDING"
+            },
+            {
+              "name": "SELF_CORRELATION",
+              "result": "PENDING"
+            },
+            {
+              "name": "IS_SHARPE",
+              "result": "PENDING"
+            },
+            {
+              "name": "OTHERS",
+              "result": "PENDING"
+            }
+          ]
+        },
+        "train": null,
+        "test": null,
+        "prod": null,
+        "competitions": [
+          {
+            "id": "challenge",
+            "name": "Challenge"
+          }
+        ],
+        "themes": [],
+        "pyramids": null,
+        "pyramidThemes": {
+          "effective": 0,
+          "pyramids": null
+        },
+        "team": null,
+        "origin": "PLATFORM"
+      }
+    }
+  },
+  {
+    "name": "analyst_eps_yield",
+    "expression": "group_rank(ts_rank(est_eps / close, 126), industry)",
+    "sim": {
+      "sim_id": "2ChtkNZE4Zs9RN2E9cgQH3",
+      "status": "TIMEOUT"
+    }
+  },
+  {
+    "name": "fcf_yield",
+    "expression": "group_rank(ts_rank(free_cash_flow_reported_value / equity, 126), industry)",
+    "error": "('Connection aborted.', TimeoutError(60, 'Operation timed out'))"
+  },
+  {
+    "name": "tech_fund_mix",
+    "expression": "0.5 * rank(-(close / open - 1)) + 0.5 * rank(ts_rank(operating_income / equity, 126))",
+    "sim": {
+      "sim_id": "2hHUBZ7Oq4LebjFWhIDXpY7",
+      "status": "TIMEOUT"
+    }
+  },
+  {
+    "name": "lowvol_value_mix",
+    "expression": "0.5 * rank(-ts_std_dev(returns, 20)) + 0.5 * rank(ts_rank(operating_income / equity, 126))",
+    "error": "('Connection aborted.', TimeoutError(60, 'Operation timed out'))"
+  },
+  {
+    "name": "volume_reversal_mix",
+    "expression": "rank(-(close / open - 1)) * rank(volume / ts_mean(volume, 20))",
+    "sim": {
+      "sim_id": "3xlgoL6dk4Y4bzPRA5Mzpkg",
+      "status": "TIMEOUT"
+    }
+  },
+  {
+    "name": "price_volume_divergence",
+    "expression": "rank(ts_sum(close / open - 1, 5)) - rank(ts_sum(returns, 5))",
+    "error": "('Connection aborted.', TimeoutError(60, 'Operation timed out'))"
+  }
+]

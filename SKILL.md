@@ -618,3 +618,110 @@ pyenv exec python scripts/evolve_skill.py --apply
 
 > 本节仅保留机制说明。真实运行生成的 alpha ID、表达式、PnL、提交状态和相关性记录可能关联个人账号与研究资产，默认写入本地 `alpha_db.json`，不随仓库发布。
 > 若需要沉淀通用经验，请人工汇总成脱敏规则后再写回第 4、5、6、8、10 节。
+
+### 2026-06-23 16:26 UTC — 批量初始化快照
+
+- 总 alpha：13 | ACTIVE：1 | 非 ACTIVE：12
+- 信号簇分布：{'technical': 6, 'other': 6, 'analyst': 1}
+
+**ACTIVE 高 Fitness Top 5**：
+- `zq9Wm0kK` (other): Sharpe=2.01, Fitness=1.32, TO=0.063 — `group_rank(ts_rank(operating_income / equity, 126), subindustry)`
+
+**ACTIVE 中日收益高相关对**：无 ≥ 0.7 的对（或 PnL 不足）
+
+**明显失效信号（Fitness < 0.5，共 4 个）**：
+- 簇分布：{'technical': 3, 'other': 1}
+
+**高换手（TO > 50%，共 2 个）**：
+- 簇分布：{'other': 2}
+
+---
+
+
+### 2026-06-24 05:36 UTC
+
+- **XgppO8E8** (UNSUBMITTED, other): Sharpe=0.88, Fitness=0.42, TO=0.0568, DD=0.0579。指标一般，需继续优化；暂无 ACTIVE alpha 可比相关
+  - 表达式：`group_rank(ts_rank(-liabilities / assets, 126), subindustry)`
+- **npggexmd** (UNSUBMITTED, other): Sharpe=0.36, Fitness=0.1, TO=0.1171, DD=0.0982。指标一般，需继续优化；暂无 ACTIVE alpha 可比相关
+  - 表达式：`group_rank(ts_rank(est_sales - ts_delay(est_sales, 20), 60), industry)`
+- **pw66x2Vg** (UNSUBMITTED, analyst+technical): Sharpe=1.73, Fitness=1.41, TO=0.0861, DD=0.0473。满足基础提交门槛；暂无 ACTIVE alpha 可比相关
+  - 表达式：`0.3 * rank(-ts_delta(volume, 5) / ts_std_dev(volume, 20)) + 0.7 * group_rank(ts_rank(est_eps / close, 126), industry)`
+- **kq33vvPP** (UNSUBMITTED, analyst): Sharpe=0.49, Fitness=0.16, TO=0.1179, DD=0.085。指标一般，需继续优化；暂无 ACTIVE alpha 可比相关
+  - 表达式：`group_rank(ts_rank(est_eps - ts_delay(est_eps, 20), 60), industry)`
+- **kq33vN16** (UNSUBMITTED, technical): Sharpe=0.72, Fitness=0.48, TO=0.0546, DD=0.2243。指标一般，需继续优化；暂无 ACTIVE alpha 可比相关
+  - 表达式：`0.3 * rank(-ts_std_dev(returns, 20)) + 0.7 * group_rank(ts_rank(operating_income / equity, 126), subindustry)`
+- **pw66xmb6** (UNSUBMITTED, other): Sharpe=1.76, Fitness=1.27, TO=0.0699, DD=0.0332。满足基础提交门槛；暂无 ACTIVE alpha 可比相关
+  - 表达式：`0.5 * group_rank(ts_rank(return_equity, 126), subindustry) + 0.5 * group_rank(ts_rank(ebitda / equity, 126), industry)`
+- **kq33vx6L** (UNSUBMITTED, other): Sharpe=1.92, Fitness=1.4, TO=0.0593, DD=0.0496。满足基础提交门槛；暂无 ACTIVE alpha 可比相关
+  - 表达式：`0.3 * rank(-(close / open - 1)) + 0.7 * rank(ts_rank(operating_income / equity, 126))`
+- **GrwwQzpQ** (ACTIVE, analyst): Sharpe=2.81, Fitness=2.56, TO=0.1416, DD=0.0373。高 Fitness 低换手，优秀候选；暂无 ACTIVE alpha 可比相关
+  - 表达式：`0.5 * group_rank(ts_rank(operating_income / equity, 126), subindustry) + 0.5 * group_rank(ts_rank(est_eps / close, 12...`
+- **Jjpp3Qvx** (UNSUBMITTED, cashflow): Sharpe=1.36, Fitness=0.91, TO=0.0519, DD=0.0722。指标一般，需继续优化；与现有 ACTIVE alpha 低相关 (0.25)，分散价值较高
+  - 相关：GrwwQzpQ(+0.25)
+  - 表达式：`group_rank(ts_rank(free_cash_flow_reported_value / equity, 252), industry)`
+- **O0pp6xmJ** (UNSUBMITTED, other): Sharpe=1.51, Fitness=0.78, TO=0.2077, DD=0.0346。指标一般，需继续优化；与 GrwwQzpQ 中等相关 (0.56)，谨慎提交
+  - 相关：GrwwQzpQ(+0.56)
+  - 表达式：`group_rank(ts_rank(eps / close, 126), subindustry)`
+- **1Y77GgoQ** (ACTIVE, analyst): Sharpe=1.62, Fitness=1.28, TO=0.0858, DD=0.0559。满足基础提交门槛；与 GrwwQzpQ 中等相关 (0.65)，谨慎提交
+  - 相关：GrwwQzpQ(+0.65)
+  - 表达式：`group_rank(ts_rank(est_fcf / close, 126), industry)`
+- **wpRRN6MQ** (UNSUBMITTED, other): Sharpe=0.95, Fitness=0.64, TO=0.1744, DD=0.0942。指标一般，需继续优化；与现有 ACTIVE alpha 低相关 (0.41)，分散价值较高
+  - 相关：1Y77GgoQ(+0.41), GrwwQzpQ(+0.21)
+  - 表达式：`group_rank(ts_rank(bookvalue_ps / close, 252), industry)`
+- **blLLxY3R** (UNSUBMITTED, other): Sharpe=1.0, Fitness=0.52, TO=0.0751, DD=0.0729。指标一般，需继续优化；与现有 ACTIVE alpha 低相关 (0.34)，分散价值较高
+  - 相关：GrwwQzpQ(+0.34), 1Y77GgoQ(+0.25)
+  - 表达式：`group_rank(ts_rank(sales_growth, 126), subindustry)`
+- **LLppKwjM** (UNSUBMITTED, analyst): Sharpe=1.49, Fitness=1.18, TO=0.1464, DD=0.0783。满足基础提交门槛；与 1Y77GgoQ 高度相关 (0.75)，需换信号簇
+  - 相关：1Y77GgoQ(+0.75), GrwwQzpQ(+0.62)
+  - 表达式：`group_rank(ts_rank(est_ebitda / close, 126), industry)`
+- **QPaa0gMw** (UNSUBMITTED, cashflow): Sharpe=0.94, Fitness=0.51, TO=0.0554, DD=0.0684。指标一般，需继续优化；与现有 ACTIVE alpha 低相关 (0.41)，分散价值较高
+  - 相关：1Y77GgoQ(+0.41), GrwwQzpQ(+0.23)
+  - 表达式：`group_rank(ts_rank(cash_flow_from_operations / equity, 126), industry)`
+- **omKKaNK5** (ACTIVE, cashflow): Sharpe=1.77, Fitness=1.23, TO=0.156, DD=0.044。满足基础提交门槛；与 1Y77GgoQ 中等相关 (0.66)，谨慎提交
+  - 相关：1Y77GgoQ(+0.66), GrwwQzpQ(+0.48)
+  - 表达式：`group_rank(ts_rank(free_cash_flow_per_share / close, 126), subindustry)`
+- **pw66aVOV** (UNSUBMITTED, cashflow): Sharpe=1.43, Fitness=0.99, TO=0.0588, DD=0.0717。指标一般，需继续优化；与 omKKaNK5 中等相关 (0.60)，谨慎提交
+  - 相关：omKKaNK5(+0.60), 1Y77GgoQ(+0.43), GrwwQzpQ(+0.25)
+  - 表达式：`group_rank(ts_rank(free_cash_flow_reported_value / equity, 126), industry)`
+- **mL88aA62** (UNSUBMITTED, analyst): Sharpe=2.25, Fitness=2.12, TO=0.1238, DD=0.0512。高 Fitness 低换手，优秀候选；与 GrwwQzpQ 高度相关 (0.82)，需换信号簇
+  - 相关：GrwwQzpQ(+0.82), 1Y77GgoQ(+0.67), omKKaNK5(+0.38)
+  - 表达式：`group_rank(ts_rank(est_eps / close, 252), industry)`
+- **6XwwMxd5** (UNSUBMITTED, other): Sharpe=1.34, Fitness=0.79, TO=0.0677, DD=0.0647。指标一般，需继续优化；与现有 ACTIVE alpha 低相关 (0.49)，分散价值较高
+  - 相关：omKKaNK5(+0.49), 1Y77GgoQ(+0.35), GrwwQzpQ(+0.28)
+  - 表达式：`group_rank(ts_rank(eps / ts_delay(eps, 252) - 1, 126), subindustry)`
+- **P0pp5QdE** (ACTIVE, other): Sharpe=1.43, Fitness=1.21, TO=0.0676, DD=0.0725。满足基础提交门槛；与 1Y77GgoQ 高度相关 (0.73)，需换信号簇
+  - 相关：1Y77GgoQ(+0.73), omKKaNK5(+0.49), GrwwQzpQ(+0.45)
+  - 表达式：`group_rank(ts_rank(est_bookvalue_ps / close, 252), industry)`
+- **d5xxWPJw** (UNSUBMITTED, other): Sharpe=0.97, Fitness=0.84, TO=0.1239, DD=0.1193。指标一般，需继续优化；与 P0pp5QdE 中等相关 (0.64)，谨慎提交
+  - 相关：P0pp5QdE(+0.64), 1Y77GgoQ(+0.38), GrwwQzpQ(+0.27)
+  - 表达式：`group_rank(ts_rank(est_sales / close, 126), industry)`
+- **LLppMEze** (UNSUBMITTED, other): Sharpe=1.67, Fitness=1.01, TO=0.063, DD=0.0335。指标一般，需继续优化；与现有 ACTIVE alpha 低相关 (0.44)，分散价值较高
+  - 相关：GrwwQzpQ(+0.44), P0pp5QdE(-0.23), omKKaNK5(+0.15)
+  - 表达式：`group_rank(ts_rank(operating_income / assets, 126), subindustry)`
+- **omKKEEk6** (ACTIVE, analyst): Sharpe=2.13, Fitness=1.96, TO=0.0907, DD=0.0521。高 Fitness 低换手，优秀候选；与 GrwwQzpQ 高度相关 (0.82)，需换信号簇
+  - 相关：GrwwQzpQ(+0.82), 1Y77GgoQ(+0.67), P0pp5QdE(+0.64)
+  - 表达式：`group_rank(ts_rank(est_eps / close, 252), industry)`
+- **1Y77NpAJ** (UNSUBMITTED, other): Sharpe=1.37, Fitness=0.87, TO=0.0583, DD=0.0537。指标一般，需继续优化；与现有 ACTIVE alpha 低相关 (0.43)，分散价值较高
+  - 相关：GrwwQzpQ(+0.43), 1Y77GgoQ(+0.41), omKKEEk6(+0.40)
+  - 表达式：`group_rank(ts_rank(ebitda / equity, 126), industry)`
+- **blLL6vaq** (UNSUBMITTED, other): Sharpe=1.15, Fitness=0.61, TO=0.0566, DD=0.0384。指标一般，需继续优化；与现有 ACTIVE alpha 低相关 (0.42)，分散价值较高
+  - 相关：GrwwQzpQ(+0.42), omKKaNK5(+0.33), 1Y77GgoQ(+0.32)
+  - 表达式：`group_rank(ts_rank(ebitda / assets, 126), subindustry)`
+- **pw66dnbo** (UNSUBMITTED, other): Sharpe=0.68, Fitness=0.29, TO=0.0543, DD=0.0596。指标一般，需继续优化；与现有 ACTIVE alpha 低相关 (0.43)，分散价值较高
+  - 相关：1Y77GgoQ(+0.43), omKKaNK5(+0.42), P0pp5QdE(+0.38)
+  - 表达式：`group_rank(ts_rank(ebitda / sales, 126), subindustry)`
+- **wpRRQwv5** (UNSUBMITTED, other): Sharpe=1.46, Fitness=0.8, TO=0.0585, DD=0.0275。指标一般，需继续优化；与现有 ACTIVE alpha 低相关 (0.35)，分散价值较高
+  - 相关：GrwwQzpQ(+0.35), P0pp5QdE(-0.23), omKKaNK5(+0.12)
+  - 表达式：`group_rank(ts_rank(return_assets, 126), subindustry)`
+- **WjppOk8Z** (UNSUBMITTED, other): Sharpe=1.64, Fitness=0.95, TO=0.0765, DD=0.0313。指标一般，需继续优化；与 GrwwQzpQ 中等相关 (0.50)，谨慎提交
+  - 相关：GrwwQzpQ(+0.50), omKKaNK5(+0.28), 1Y77GgoQ(+0.16)
+  - 表达式：`group_rank(ts_rank(operating_income / equity, 63), subindustry)`
+- **LLppMV66** (UNSUBMITTED, other): Sharpe=1.45, Fitness=0.86, TO=0.0503, DD=0.0425。指标一般，需继续优化；与现有 ACTIVE alpha 低相关 (0.35)，分散价值较高
+  - 相关：GrwwQzpQ(+0.35), P0pp5QdE(-0.28), omKKaNK5(+0.17)
+  - 表达式：`group_rank(ts_rank(return_equity, 252), subindustry)`
+- **1Y77jN2J** (UNSUBMITTED, other): Sharpe=1.84, Fitness=1.27, TO=0.0535, DD=0.036。满足基础提交门槛；与现有 ACTIVE alpha 低相关 (0.47)，分散价值较高
+  - 相关：GrwwQzpQ(+0.47), P0pp5QdE(-0.24), omKKaNK5(+0.20)
+  - 表达式：`group_rank(ts_rank(operating_income / equity, 252), subindustry)`
+
+---
+
