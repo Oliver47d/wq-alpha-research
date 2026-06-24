@@ -4,11 +4,11 @@
   "skeleton": "group_rank(ts_rank({estimate_field} / {denominator}, {window}), {group})",
   "field_pairs": [
     {"estimate_field": "est_eps", "denominator": "close"},
-    {"estimate_field": "est_revenue", "denominator": "cap"},
-    {"estimate_field": "est_ebitda", "denominator": "cap"},
-    {"estimate_field": "est_fcf", "denominator": "cap"},
-    {"estimate_field": "est_ptp", "denominator": "cap"},
-    {"estimate_field": "est_eps", "denominator": "cap"}
+    {"estimate_field": "est_bookvalue_ps", "denominator": "close"},
+    {"estimate_field": "est_sales", "denominator": "close"},
+    {"estimate_field": "est_ebit", "denominator": "close"},
+    {"estimate_field": "est_netprofit", "denominator": "close"},
+    {"estimate_field": "est_shequity", "denominator": "close"}
   ],
   "param_ranges": {
     "window": [126, 252],

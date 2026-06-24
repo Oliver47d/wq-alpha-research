@@ -34,15 +34,19 @@ class FieldValidator:
         if fields_path and fields_path.exists():
             data = json.loads(fields_path.read_text(encoding="utf-8"))
             if isinstance(data, list):
-                self.field_list = [str(f) for f in data]
+                # Each item is a dict with an 'id' key, e.g. {"id": "operating_income", "alphaCount": 200, ...}
+                self.field_list = [f["id"] for f in data if isinstance(f, dict) and "id" in f]
             elif isinstance(data, dict):
-                # Could be {"fields": [...]} or {"id": [...]}
+                # Could be {"fields": [...]} or {"id": [...]} or flat {"field_name": {...}}
                 for v in data.values():
-                    if isinstance(v, list):
-                        self.field_list = [str(f) for f in v]
+                    if isinstance(v, list) and v and isinstance(v[0], dict):
+                        self.field_list = [item["id"] for item in v if isinstance(item, dict) and "id" in item]
                         break
                 if not self.field_list:
-                    self.field_list = list(data.keys())
+                    # Flat dict: keys are field names
+                    self.field_list = [k for k, v in data.items() if not isinstance(v, dict)]
+                    if not self.field_list:
+                        self.field_list = list(data.keys())
             self.valid_fields = set(self.field_list)
         self._checked: dict[str, bool] = {}
 

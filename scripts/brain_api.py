@@ -101,7 +101,7 @@ def save_lessons(lessons: dict[str, Any]) -> None:
 class BrainClient:
     """BRAIN API client with adaptive concurrency control."""
 
-    def __init__(self, max_concurrent: int = 4):
+    def __init__(self, max_concurrent: int = 2):
         self.max_concurrent = max_concurrent
         self.session: requests.Session | None = None
         self._429_count = 0
@@ -147,6 +147,11 @@ class BrainClient:
                     time.sleep(retry_after)
                     self._adjust_concurrency(True)
                     continue
+                if resp.status_code in (401, 403):
+                    print("[brain_api] Session expired, re-authenticating...", flush=True)
+                    self.connect()
+                    s = self.session  # type: ignore
+                    continue
                 return resp
             except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
                 if attempt == retries - 1:
@@ -158,11 +163,16 @@ class BrainClient:
         s = self._ensure_session()
         for attempt in range(retries):
             try:
-                resp = s.post(url, json=json_body, timeout=(10, 60), **kwargs)
+                resp = s.post(url, json=json_body, timeout=(30, 300), **kwargs)
                 if resp.status_code == 429:
                     retry_after = int(resp.headers.get("Retry-After", 5))
                     time.sleep(retry_after)
                     self._adjust_concurrency(True)
+                    continue
+                if resp.status_code in (401, 403):
+                    print("[brain_api] Session expired, re-authenticating...", flush=True)
+                    self.connect()
+                    s = self.session  # type: ignore
                     continue
                 self._adjust_concurrency(False)
                 return resp
@@ -184,7 +194,7 @@ class BrainClient:
         }
 
     def simulate(self, expression: str, settings: dict) -> dict[str, Any]:
-        """Submit a single simulation and poll until complete."""
+        """Submit to /simulations, poll until complete, then fetch alpha metrics from /alphas/{alphaId}."""
         payload = self.build_payload(expression, settings)
         resp = self.post_with_retry(f"{API_BASE}/simulations", payload)
         if resp.status_code != 201:
@@ -193,8 +203,20 @@ class BrainClient:
         location = resp.headers.get("Location", "")
         sim_id = location.rstrip("/").split("/")[-1]
 
-        result = self._poll_simulation(sim_id)
-        return result
+        sim_result = self._poll_simulation(sim_id)
+        if sim_result.get("status") != "COMPLETE":
+            return sim_result
+
+        alpha_id = sim_result.get("alpha_id", "")
+        if not alpha_id:
+            return {"status": "ERROR", "error": "No alpha ID returned", "sim_data": sim_result}
+
+        # Fetch full alpha data to get sharpe/fitness/turnover from /alphas/{alphaId}
+        alpha_data = self.get_alpha(alpha_id)
+        if not alpha_data:
+            return {"status": "ERROR", "error": f"Could not fetch alpha {alpha_id}", "alpha_id": alpha_id}
+
+        return {"status": "COMPLETE", "alpha_id": alpha_id, "sim_data": alpha_data}
 
     def _poll_simulation(self, sim_id: str, timeout: int = 600) -> dict[str, Any]:
         start = time.time()
@@ -206,7 +228,7 @@ class BrainClient:
             data = resp.json()
             status = data.get("status", "UNKNOWN")
             if status == "COMPLETE":
-                alpha_id = data.get("alpha")
+                alpha_id = data.get("alpha", "")
                 return {"status": "COMPLETE", "alpha_id": alpha_id, "sim_data": data}
             if status in ("ERROR", "FAILED"):
                 return {"status": "ERROR", "sim_data": data}
@@ -300,7 +322,7 @@ class BrainClient:
 
     def submit_alpha(self, alpha_id: str) -> dict[str, Any]:
         """Submit alpha and poll for result."""
-        resp = self.post_with_retry(f"{API_BASE}/alphas/{alpha_id}/submit")
+        resp = self.post_with_retry(f"{API_BASE}/alphas/{alpha_id}/submit", json_body={})
         if resp.status_code not in (200, 201):
             return {"submitted": False, "status_code": resp.status_code, "text": resp.text[:300]}
 
@@ -356,8 +378,8 @@ def compute_correlation(
         if len(new_ret) != len(old_ret):
             continue
         corr = float(np.corrcoef(new_ret, old_ret)[0, 1])
-        results.append({"alpha_id": old_id, "corr": corr, "sharpe": old.get("sharpe"), "fitness": old.get("fitness")})
-    results.sort(key=lambda x: abs(x["corr"]), reverse=True)
+        results.append({"alpha_id": old_id, "correlation": corr, "sharpe": old.get("sharpe"), "fitness": old.get("fitness")})
+    results.sort(key=lambda x: abs(x["correlation"]), reverse=True)
     return results
 
 

@@ -42,6 +42,8 @@ from brain_api import (  # noqa: E402
     update_lessons_from_result,
 )
 from generate_candidates import (  # noqa: E402
+    FIELDS_PATH,
+    FieldValidator,
     deduplicate,
     expand_template,
     load_templates,
@@ -85,10 +87,68 @@ def save_state(state: dict) -> None:
     STATE_PATH.write_text(json.dumps(state, indent=2, ensure_ascii=False), "utf-8")
 
 
+def _scan_papers_folder() -> dict[str, dict]:
+    """Scan papers/ directory and return {filename: entry} for unregistered PDFs."""
+    papers_dir = SKILL_DIR / "papers"
+    if not papers_dir.is_dir():
+        return {}
+    entries = {}
+    for pdf_file in sorted(papers_dir.glob("*.pdf")):
+        locator = f"papers/{pdf_file.name}"
+        # Extract title: strip leading number prefix like "1. " or "10. "
+        name = pdf_file.stem
+        name = name.split(". ", 1)[-1] if ". " in name else name
+        entries[locator] = {
+            "locator": locator,
+            "title": name,
+            "type": "research_report",
+            "status": "unread",
+        }
+    return entries
+
+
+def _generate_src_id(existing_keys: list[str]) -> str:
+    """Generate next src_XXX ID."""
+    nums = []
+    for k in existing_keys:
+        if k.startswith("src_"):
+            try:
+                nums.append(int(k.split("_")[1]))
+            except (IndexError, ValueError):
+                pass
+    nxt = max(nums) + 1 if nums else 1
+    return f"src_{nxt:03d}"
+
+
 def load_papers_registry() -> dict[str, Any]:
+    reg: dict[str, Any] = {
+        "sources": {},
+        "stats": {"total": 0, "consumed": 0, "remaining": 0},
+    }
     if PAPERS_REGISTRY_PATH.exists():
-        return json.loads(PAPERS_REGISTRY_PATH.read_text("utf-8"))
-    return {"sources": {}, "stats": {"total": 0, "consumed": 0, "remaining": 0}}
+        reg = json.loads(PAPERS_REGISTRY_PATH.read_text("utf-8"))
+
+    # Auto-scan papers/ and register any new PDFs not yet in registry
+    scanned = _scan_papers_folder()
+    existing_locators = {v["locator"] for v in reg.get("sources", {}).values()}
+    added = 0
+    for locator, entry in scanned.items():
+        if locator not in existing_locators:
+            new_key = _generate_src_id(list(reg["sources"].keys()))
+            reg["sources"][new_key] = entry
+            added += 1
+
+    if added > 0:
+        sources = reg["sources"]
+        reg["stats"] = {
+            "total": len(sources),
+            "consumed": sum(1 for s in sources.values() if s.get("status") == "consumed"),
+            "remaining": sum(1 for s in sources.values() if s.get("status") != "consumed"),
+        }
+        save_papers_registry(reg)
+        print(f"[papers] Auto-registered {added} new PDF(s) from papers/")
+
+    return reg
 
 
 def save_papers_registry(reg: dict) -> None:
@@ -106,6 +166,10 @@ def build_candidates(lessons: dict, max_per_template: int = 15) -> list[dict]:
         print("[breadth] No templates found.")
         return []
 
+    # Always validate fields against BRAIN reference to avoid simulation errors
+    validator = FieldValidator(FIELDS_PATH)
+    print(f"  [field-validator] Loaded {len(validator.field_list)} fields for validation")
+
     patterns = lessons.get("patterns", {})
     all_candidates: list[dict] = []
 
@@ -120,7 +184,7 @@ def build_candidates(lessons: dict, max_per_template: int = 15) -> list[dict]:
 
         # Deprioritize: reduce candidate count
         effective_max = max_per_template // 2 if action == "deprioritize" else max_per_template
-        cands = expand_template(tmpl, max_candidates=effective_max)
+        cands = expand_template(tmpl, max_candidates=effective_max, validator=validator)
         print(f"  [expand] {tid}: {len(cands)} candidates (action={action}, max={effective_max})")
         all_candidates.extend(cands)
 
@@ -216,7 +280,8 @@ def run_breadth_round(
             if alpha_id:
                 print(f"  [SUBMIT] Attempting submission for {alpha_id} (Sharpe={sharpe})")
                 submit_result = client.submit_alpha(alpha_id)
-                if submit_result.get("status") == "ACTIVE":
+                submit_status = submit_result.get("status", "unknown")
+                if submit_status == "ACTIVE":
                     round_result["new_active"] += 1
                     # Update DB
                     db["alphas"][alpha_id] = {
@@ -233,8 +298,20 @@ def run_breadth_round(
                     if len(new_pnl) >= 50:
                         active_pnls[alpha_id] = new_pnl
                     print(f"  [ACTIVE] {alpha_id} activated!")
+                elif submit_status == "PENDING":
+                    # Submission accepted but still under review — not a failure
+                    db["alphas"][alpha_id] = {
+                        "expression": r.get("expression", ""),
+                        "status": "PENDING",
+                        "sharpe": sharpe,
+                        "fitness": fitness,
+                        "turnover": turnover,
+                        "template_id": r.get("template_id", "unknown"),
+                        "submitted_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    print(f"  [SUBMIT-PENDING] {alpha_id} submitted, awaiting review")
                 else:
-                    print(f"  [SUBMIT-FAIL] {alpha_id}: {submit_result.get('status', 'unknown')}")
+                    print(f"  [SUBMIT-FAIL] {alpha_id}: {submit_status}")
 
         elif action == "OBSERVE":
             round_result["observed"].append({
@@ -534,7 +611,10 @@ def should_terminate(state: dict, reg: dict, has_candidates: bool) -> tuple[bool
 
     # Check consecutive no-active
     if state["consecutive_no_active"] >= 3:
-        return True, "3 consecutive rounds with no new ACTIVE alphas"
+        return True, (
+            "3 consecutive rounds with no new ACTIVE alphas. "
+            "Tip: run with --reset-state to start fresh."
+        )
 
     # Check candidate pool + papers
     remaining = reg.get("stats", {}).get("remaining", 0)

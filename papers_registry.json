@@ -12,11 +12,515 @@
         "hybrid_tech_fundamental"
       ],
       "extraction_round": 1
+    },
+    "src_002": {
+      "locator": "papers/1. A股市场的动量反转效应研究.pdf",
+      "title": "A股市场的动量反转效应研究",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_003": {
+      "locator": "papers/10. 基于机构持股信息的Portable_Alpha策略增强.pdf",
+      "title": "基于机构持股信息的Portable_Alpha策略增强",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_004": {
+      "locator": "papers/11. Level2行情选股因子初探.pdf",
+      "title": "Level2行情选股因子初探",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_005": {
+      "locator": "papers/12. “量”与“价”的结合.pdf",
+      "title": "“量”与“价”的结合",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_006": {
+      "locator": "papers/13. 因子大讲坛.pdf",
+      "title": "因子大讲坛",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_007": {
+      "locator": "papers/14. 交易行为的波动和股票预期收益.pdf",
+      "title": "交易行为的波动和股票预期收益",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_008": {
+      "locator": "papers/15. 选股因子空头收益的转化.pdf",
+      "title": "选股因子空头收益的转化",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_009": {
+      "locator": "papers/16. “博彩型”股票的预期收益.pdf",
+      "title": "“博彩型”股票的预期收益",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_010": {
+      "locator": "papers/17. 选股因子的正交.pdf",
+      "title": "选股因子的正交",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_011": {
+      "locator": "papers/18. 价格形态选股因子.pdf",
+      "title": "价格形态选股因子",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_012": {
+      "locator": "papers/19. 高频因子之股票收益分布特征.pdf",
+      "title": "高频因子之股票收益分布特征",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_013": {
+      "locator": "papers/2. 多因子选股模型的有效与失效.pdf",
+      "title": "多因子选股模型的有效与失效",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_014": {
+      "locator": "papers/20. 基于条件期望的因子择时框架.pdf",
+      "title": "基于条件期望的因子择时框架",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_015": {
+      "locator": "papers/21. 分析师一致预期相关因子.pdf",
+      "title": "分析师一致预期相关因子",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_016": {
+      "locator": "papers/22. 分析师覆盖度与股票预期收益.pdf",
+      "title": "分析师覆盖度与股票预期收益",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_017": {
+      "locator": "papers/23. 历史财务信息对股票收益的预测能力.pdf",
+      "title": "历史财务信息对股票收益的预测能力",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_018": {
+      "locator": "papers/24. 基于拟合优度和波动率调整的因子溢价估计.pdf",
+      "title": "基于拟合优度和波动率调整的因子溢价估计",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_019": {
+      "locator": "papers/25. 高频因子之已实现波动分解.pdf",
+      "title": "高频因子之已实现波动分解",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_020": {
+      "locator": "papers/26. 因子加权、正交和择时的若干性质.pdf",
+      "title": "因子加权、正交和择时的若干性质",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_021": {
+      "locator": "papers/27. 分位数回归在多因子选股中的应用.pdf",
+      "title": "分位数回归在多因子选股中的应用",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_022": {
+      "locator": "papers/28. 一致预期质量分析.pdf",
+      "title": "一致预期质量分析",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_023": {
+      "locator": "papers/29. 底层因子降维方法对比.pdf",
+      "title": "底层因子降维方法对比",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_024": {
+      "locator": "papers/3. 从Spearman相关系数出发研究因子有效性.pdf",
+      "title": "从Spearman相关系数出发研究因子有效性",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_025": {
+      "locator": "papers/30. 因子择时模型改进与择时指标库构建.pdf",
+      "title": "因子择时模型改进与择时指标库构建",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_026": {
+      "locator": "papers/31. 因子择时指标的筛选.pdf",
+      "title": "因子择时指标的筛选",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_027": {
+      "locator": "papers/32. 因子择时在风险控制模型中的应用.pdf",
+      "title": "因子择时在风险控制模型中的应用",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_028": {
+      "locator": "papers/33. 预期调整类因子的收益特征.pdf",
+      "title": "预期调整类因子的收益特征",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_029": {
+      "locator": "papers/34. 宏观经济数据可以用来选股吗？.pdf",
+      "title": "宏观经济数据可以用来选股吗？",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_030": {
+      "locator": "papers/35. 宏观经济的不确定性在A股市场被定价了吗_.pdf",
+      "title": "宏观经济的不确定性在A股市场被定价了吗_",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_031": {
+      "locator": "papers/36. 哪些宏观经济指标存在选股效应？.pdf",
+      "title": "哪些宏观经济指标存在选股效应？",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_032": {
+      "locator": "papers/37. A股是否存在异质动量效应？.pdf",
+      "title": "A股是否存在异质动量效应？",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_033": {
+      "locator": "papers/38. 因子敞口上限对优化组合的影响.pdf",
+      "title": "因子敞口上限对优化组合的影响",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_034": {
+      "locator": "papers/39. 如何计算盈利指标的趋势_.pdf",
+      "title": "如何计算盈利指标的趋势_",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_035": {
+      "locator": "papers/4. 因子模型的尾部相关性研究.pdf",
+      "title": "因子模型的尾部相关性研究",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_036": {
+      "locator": "papers/40. 预期因子的底层数据处理.pdf",
+      "title": "预期因子的底层数据处理",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_037": {
+      "locator": "papers/41. 医药行业因子选股研究.pdf",
+      "title": "医药行业因子选股研究",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_038": {
+      "locator": "papers/42. 因子失效预警，因子拥挤.pdf",
+      "title": "因子失效预警，因子拥挤",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_039": {
+      "locator": "papers/43. 因子拥挤度的改进.pdf",
+      "title": "因子拥挤度的改进",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_040": {
+      "locator": "papers/44. 因子拥挤度的扩展.pdf",
+      "title": "因子拥挤度的扩展",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_041": {
+      "locator": "papers/45. 质量因子.pdf",
+      "title": "质量因子",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_042": {
+      "locator": "papers/46. 日内分时成交中的玄机.pdf",
+      "title": "日内分时成交中的玄机",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_043": {
+      "locator": "papers/47. 捕捉投资者的交易意愿.pdf",
+      "title": "捕捉投资者的交易意愿",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_044": {
+      "locator": "papers/48. 探索A股的五因子模型.pdf",
+      "title": "探索A股的五因子模型",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_045": {
+      "locator": "papers/49. 当下跌遇到托底.pdf",
+      "title": "当下跌遇到托底",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_046": {
+      "locator": "papers/5. 寻找股价驱动新因子之净换手率.pdf",
+      "title": "寻找股价驱动新因子之净换手率",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_047": {
+      "locator": "papers/50. 个股加权方式对比.pdf",
+      "title": "个股加权方式对比",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_048": {
+      "locator": "papers/51. 消费板块的因子组合.pdf",
+      "title": "消费板块的因子组合",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_049": {
+      "locator": "papers/52. 基于回归树的因子择时模型.pdf",
+      "title": "基于回归树的因子择时模型",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_050": {
+      "locator": "papers/53. 上市公司关系网因子.pdf",
+      "title": "上市公司关系网因子",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_051": {
+      "locator": "papers/54. 资产增长稳定性与资本结构变化.pdf",
+      "title": "资产增长稳定性与资本结构变化",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_052": {
+      "locator": "papers/55. 价量波动幅度.pdf",
+      "title": "价量波动幅度",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_053": {
+      "locator": "papers/56. 买卖单数据中的Alpha.pdf",
+      "title": "买卖单数据中的Alpha",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_054": {
+      "locator": "papers/57. 基于主动买入行为的选股因子.pdf",
+      "title": "基于主动买入行为的选股因子",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_055": {
+      "locator": "papers/58. 知情交易与主买主卖.pdf",
+      "title": "知情交易与主买主卖",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_056": {
+      "locator": "papers/59. 基于逐笔成交数据的高频因子梳理.pdf",
+      "title": "基于逐笔成交数据的高频因子梳理",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_057": {
+      "locator": "papers/6. 极值视角下的多因子选股策略.pdf",
+      "title": "极值视角下的多因子选股策略",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_058": {
+      "locator": "papers/60. 如何利用高频因子的空头效应？.pdf",
+      "title": "如何利用高频因子的空头效应？",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_059": {
+      "locator": "papers/61. 从加权IC到机器学习：高频因子多头失效的修正.pdf",
+      "title": "从加权IC到机器学习：高频因子多头失效的修正",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_060": {
+      "locator": "papers/62. 被动产品的规模扩张对alpha策略的影响分析.pdf",
+      "title": "被动产品的规模扩张对alpha策略的影响分析",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_061": {
+      "locator": "papers/63. 剔除高频多因子空头组合后的沪深300指数增强策略.pdf",
+      "title": "剔除高频多因子空头组合后的沪深300指数增强策略",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_062": {
+      "locator": "papers/64. 基于直观逻辑和机器学习的高频数据低频化应用.pdf",
+      "title": "基于直观逻辑和机器学习的高频数据低频化应用",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_063": {
+      "locator": "papers/65. 剔除高频因子空头组合后的中证500指数增强策略.pdf",
+      "title": "剔除高频因子空头组合后的中证500指数增强策略",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_064": {
+      "locator": "papers/66. 寻找逐笔交易中的有效信息.pdf",
+      "title": "寻找逐笔交易中的有效信息",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_065": {
+      "locator": "papers/67. 短周期高频因子与组合调仓收益增强.pdf",
+      "title": "短周期高频因子与组合调仓收益增强",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_066": {
+      "locator": "papers/68. 基金重仓超配因子及其对指数增强组合的影响.pdf",
+      "title": "基金重仓超配因子及其对指数增强组合的影响",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_067": {
+      "locator": "papers/69. 高频因子的现实与幻想.pdf",
+      "title": "高频因子的现实与幻想",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_068": {
+      "locator": "papers/7. 融资推动股价明显，融券作用有限.pdf",
+      "title": "融资推动股价明显，融券作用有限",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_069": {
+      "locator": "papers/70. 日内市场微观结构与高频因子选股能力.pdf",
+      "title": "日内市场微观结构与高频因子选股能力",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_070": {
+      "locator": "papers/71. 逐笔大单因子与大资金行为.pdf",
+      "title": "逐笔大单因子与大资金行为",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_071": {
+      "locator": "papers/72. 大单的精细化处理与大单因子重构.pdf",
+      "title": "大单的精细化处理与大单因子重构",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_072": {
+      "locator": "papers/73. 使用基本面逻辑改进ROE因子.pdf",
+      "title": "使用基本面逻辑改进ROE因子",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_073": {
+      "locator": "papers/74. 基于风格特征的股票重新分类及应用.pdf",
+      "title": "基于风格特征的股票重新分类及应用",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_074": {
+      "locator": "papers/75. 限价订单簿（LOB）的还原和应用.pdf",
+      "title": "限价订单簿（LOB）的还原和应用",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_075": {
+      "locator": "papers/76. 基于深度学习的高频因子挖掘.pdf",
+      "title": "基于深度学习的高频因子挖掘",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_076": {
+      "locator": "papers/77. 改进深度学习高频因子的9个尝试.pdf",
+      "title": "改进深度学习高频因子的9个尝试",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_077": {
+      "locator": "papers/78. 构造A股价值组合的三种范式.pdf",
+      "title": "构造A股价值组合的三种范式",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_078": {
+      "locator": "papers/79. 用注意力机制优化深度学习高频因子.pdf",
+      "title": "用注意力机制优化深度学习高频因子",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_079": {
+      "locator": "papers/8. 从串联到并联~单因子多策略组合.pdf",
+      "title": "从串联到并联~单因子多策略组合",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_080": {
+      "locator": "papers/80. 股票久期的定义、溢价及应用.pdf",
+      "title": "股票久期的定义、溢价及应用",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_081": {
+      "locator": "papers/81. 净利润相关指标的进一步改进.pdf",
+      "title": "净利润相关指标的进一步改进",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_082": {
+      "locator": "papers/82. 不可忽视的无形资产.pdf",
+      "title": "不可忽视的无形资产",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_083": {
+      "locator": "papers/83. 盈利加速的定量刻画与高增长组合的构建.pdf",
+      "title": "盈利加速的定量刻画与高增长组合的构建",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_084": {
+      "locator": "papers/85. 买卖单主动成交中的隐藏信息.pdf",
+      "title": "买卖单主动成交中的隐藏信息",
+      "type": "research_report",
+      "status": "unread"
+    },
+    "src_085": {
+      "locator": "papers/9. 上市公司薪酬那点事.pdf",
+      "title": "上市公司薪酬那点事",
+      "type": "research_report",
+      "status": "unread"
     }
   },
   "stats": {
-    "total": 1,
+    "total": 85,
     "consumed": 1,
-    "remaining": 0
+    "remaining": 84
   }
 }

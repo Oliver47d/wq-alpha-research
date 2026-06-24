@@ -4,8 +4,8 @@
   "skeleton": "{weight_tech} * rank(-({tech_signal})) + {weight_fund} * group_rank(ts_rank({fund_numerator} / {fund_denominator}, {window}), {group})",
   "field_pairs": [
     {"tech_signal": "close/open", "fund_numerator": "operating_income", "fund_denominator": "equity"},
-    {"tech_signal": "close/open", "fund_numerator": "net_income", "fund_denominator": "equity"},
-    {"tech_signal": "ts_mean(close/open, 5)", "fund_numerator": "ebit", "fund_denominator": "equity"},
+    {"tech_signal": "close/open", "fund_numerator": "ebit", "fund_denominator": "equity"},
+    {"tech_signal": "ts_mean(close/open, 5)", "fund_numerator": "operating_income", "fund_denominator": "equity"},
     {"tech_signal": "ts_mean(close/open, 5)", "fund_numerator": "ebitda", "fund_denominator": "sales"}
   ],
   "param_ranges": {
