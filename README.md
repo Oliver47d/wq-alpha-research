@@ -1,151 +1,248 @@
-# WQ Alpha Research Skill
+# WQ Alpha Research — Automatic Alpha Discovery System
 
-A self-evolving WorldQuant BRAIN alpha research skill. It helps agents design WQ Alpha expressions, search fields, diagnose simulation failures, check IS metrics, manage self-correlation, and turn each BRAIN interaction into reusable research rules.
+A self-evolving WorldQuant BRAIN alpha research system that runs **unattended**. It combines script-driven breadth (parameter grid exploration) with agent-driven depth (paper / report inspiration extraction) in a batch fuel-mine loop, turning each simulation result into reusable lessons for the next round.
 
-The core idea is simple: do not let alpha research stay as scattered one-off prompts. Use the skill to build alphas, test them, inspect failures, compare daily-return correlations, and then distill the useful lessons back into `SKILL.md`.
+> **Target platform**: WorldQuant BRAIN · USA TOP3000 · delay=1 · 4,367 data fields
 
-This repository is a reusable agent skill, not a credential bundle. Keep all account credentials, raw alpha IDs, PnL records, and private candidate expressions local.
+---
 
-## Why This Skill Exists
+## How It Works
 
-WQ Alpha mining is not only about writing more expressions. The bottleneck is usually the research loop:
+```
+Papers / Reports → papers_registry.json (tracker)
+  → Agent extracts templates per paper → templates/*.json
+    → mining_loop.py (expand params → batch simulate → quality filter)
+      → lessons.json (feedback loop)
+        → next paper extraction references lessons.json
+```
 
-- finding usable fields fast enough;
-- avoiding repeated low-Sharpe templates;
-- controlling turnover before submission;
-- checking SELF_CORRELATION against existing ACTIVE alphas;
-- preserving lessons from failed simulations instead of rediscovering them later.
+The system alternates between two engines:
 
-This skill packages that loop into an agent-readable playbook plus scripts. It gives the agent local field context, practical expression templates, IS failure diagnostics, submission checks, and a self-evolution mechanism for turning new runs into better future behavior.
+| Engine | Role | Mechanism |
+|--------|------|-----------|
+| **Breadth** (scripts) | Parameter grid exploration | `generate_candidates.py` expands template skeletons × field pairs × param ranges into candidate expressions |
+| **Depth** (agent) | Paper-inspired template creation | Agent reads papers, extracts structured template JSON with skeleton + field pairs + param ranges + hypothesis |
 
-## Mining Effect
+### Batch Fuel-Mine Loop
 
-The current playbook is built around USA TOP3000 delay=1 and includes a local snapshot of 4,367 BRAIN data fields. It has already distilled several practical mining rules:
+```python
+while True:
+    # BREADTH: expand templates → batch simulate → quality filter → update lessons
+    candidates = generate_candidates.expand(templates, lessons)
+    results = brain_api.batch_simulate(candidates)
+    classified = quality_filter(results, alpha_db)
+    update_lessons(lessons, results)
 
-- Fundamental fields are usually the strongest starting point; `group_rank + ts_rank` with `SUBINDUSTRY` neutralization is the default baseline.
-- Analyst expectation fields are useful but need more turnover control, usually via modest decay and industry/subindustry neutralization.
-- Pure technical signals fail more often unless decay is high or they are mixed with slower fundamental signals.
-- Fitness failures are often turnover problems in disguise; decay and signal mixing are the first levers to check.
-- Self-correlation must be measured on daily PnL changes, not cumulative PnL curves.
-- Changing windows, weights, or neutralization rarely creates truly low-correlation alphas by itself; low correlation usually needs a different data source or economic logic.
+    # CHECK: 3 consecutive rounds no new ACTIVE → terminate
+    if no_active_streak >= 3:
+        break
 
-The goal is not to promise a fixed Sharpe or submission pass rate. The value is a faster, cleaner alpha mining loop: fewer invalid-field attempts, less repeated correlation failure, better default templates, and a growing memory of what worked or failed.
+    # DEPTH: candidate pool empty?
+    if not candidates:
+        if has_unread_papers:
+            fuel_one_paper()       # Agent extracts new templates
+        else:
+            break                   # Fuel exhausted
+```
 
-## Self-Evolution Loop
+### Quality Filtering
 
-`scripts/evolve_skill.py` is the feedback engine. After simulations, submissions, or status checks, it can fetch the user's alpha list, compare new/changed alphas with the local snapshot, compute daily-return correlations against ACTIVE alphas, and generate a Markdown lesson snippet.
+| Tier | Criteria |
+|------|----------|
+| **SUBMIT** | Sharpe ≥ 1.5 AND Fitness ≥ 1.0 AND Turnover < 0.7 AND correlation with ACTIVE < 0.7 |
+| **OBSERVE** | Sharpe ≥ 1.0 (tuning seed) OR Sharpe ≥ 1.5 but high correlation (redundancy demotion) OR Sharpe 1.25–1.5 with correlation < 0.3 (low-correlation upgrade) |
+| **DISCARD** | Everything else |
 
-Recommended loop:
+### Termination Conditions
 
-1. Generate or modify candidate expressions from `SKILL.md`.
-2. Simulate and inspect IS checks on BRAIN.
-3. Pull all ACTIVE alphas and compare daily-return correlation.
-4. Run `python scripts/evolve_skill.py` to preview new lessons.
-5. Review the output manually.
-6. Run `python scripts/evolve_skill.py --apply` only for local/private updates.
-7. Publish only sanitized general rules, never raw account-linked records.
+- **Fuel exhausted**: no candidates AND no unread papers
+- **Effectiveness exhausted**: 3 consecutive rounds with no new ACTIVE alpha
 
-## Contents
+---
 
-```text
-wq-alpha-research/
-├── SKILL.md
+## Project Structure
+
+```
+world_quant/
+├── README.md                          ← This file
+├── SKILL.md                           ← Agent skill playbook (727 lines)
+├── credential.txt                     ← BRAIN API credentials (gitignored)
+├── alpha_db.json                      ← Alpha snapshot database (43 alphas, 6 ACTIVE)
+│
+├── templates/                         ← Structured template JSONs
+│   ├── profitability_trend.json       ← group_rank(ts_rank(numerator/denominator, window), group)
+│   ├── analyst_estimate_trend.json    ← Analyst expectation fields with turnover control
+│   ├── hybrid_tech_fundamental.json   ← Weighted tech + fundamental signal mixing
+│   └── overnight_reversal.json        ← Overnight price reversal with decay
+│
+├── lessons.json                       ← Pattern-level mining experience
+├── papers_registry.json               ← Paper / report tracking registry
+│
 ├── scripts/
-│   ├── evolve_skill.py
-│   └── submit_batch.py
-└── references/
-    ├── wq_usa_top3000_delay1_data_fields.csv
-    ├── wq_usa_top3000_delay1_data_fields.json
+│   ├── mining_loop.py                 ← Main loop orchestrator (691 lines)
+│   ├── brain_api.py                   ← BRAIN API client: simulate, submit, correlate (519 lines)
+│   ├── generate_candidates.py         ← Template expansion engine (228 lines)
+│   ├── evolve_skill.py                ← Experience sync: alpha_db ↔ lessons.json (274 lines)
+│   ├── submit_batch.py                ← Batch submission with status polling (147 lines)
+│   ├── DESIGN.md                      ← Architecture design document
+│   └── archive/
+│       ├── run_alpha101.py            ← Legacy Alpha-101 experiment v1
+│       └── run_alpha101_v2.py         ← Legacy Alpha-101 experiment v2
+│
+└── references/                        ← Local BRAIN data field snapshot
+    ├── wq_usa_top3000_delay1_data_fields.csv       (1.4 MB, 4,367 fields)
+    ├── wq_usa_top3000_delay1_data_fields.json      (2.8 MB)
     └── wq_usa_top3000_delay1_data_fields_summary.json
 ```
 
-## What It Helps With
-
-- Search USA TOP3000 delay=1 BRAIN fields locally.
-- Build Alpha expressions from common WQ operator patterns.
-- Diagnose low Sharpe, low Fitness, high Turnover, concentrated weights, and sub-universe failures.
-- Compare candidate alphas against existing ACTIVE alphas using daily-return correlation.
-- Automate simulation/submission workflows with explicit post-submit status checks.
-- Evolve the skill from local alpha research notes without committing private records.
+---
 
 ## Quick Start
 
-Read `SKILL.md` first. It contains the actual playbook and trigger instructions.
-
-For local field lookup:
-
-```python
-import json
-from pathlib import Path
-
-fields = json.loads(
-    Path("references/wq_usa_top3000_delay1_data_fields.json").read_text(encoding="utf-8")
-)
-
-keyword = "operating_income"
-matches = [
-    f for f in fields
-    if keyword in f["id"].lower()
-    or keyword in (f.get("description") or "").lower()
-]
-print(matches[:5])
-```
-
-## BRAIN Credentials
-
-Use environment variables:
+### Prerequisites
 
 ```bash
-export WQ_BRAIN_USERNAME="your_username"
-export WQ_BRAIN_PASSWORD="your_password"
+pip install requests numpy
 ```
 
-Or create a local `credential.txt` file:
+### 1. Configure credentials
+
+Create `credential.txt` in the project root:
+
+```
+username:password
+```
+
+### 2. Run the mining loop
+
+```bash
+# Dry run (no API calls, previews candidate expansion)
+python3 scripts/mining_loop.py --dry-run
+
+# Full automatic mining
+python3 scripts/mining_loop.py
+
+# With custom settings
+python3 scripts/mining_loop.py --max-rounds 50 --max-candidates 60
+```
+
+### 3. Check results
+
+```bash
+# View alpha database
+python3 -c "import json; db=json.load(open('alpha_db.json')); print(f'{len(db[\"alphas\"])} alphas')"
+
+# View mining report
+cat mining_report.json | python3 -m json.tool
+
+# View lessons learned
+python3 -c "import json; l=json.load(open('lessons.json')); print(json.dumps(l, indent=2))"
+```
+
+---
+
+## Template Format
+
+Each template is a JSON file in `templates/`:
 
 ```json
-["your_username", "your_password"]
+{
+  "template_id": "profitability_trend",
+  "description": "Profitability trend factor: use fundamental data trends to predict cross-sectional returns",
+  "skeleton": "group_rank(ts_rank({numerator} / {denominator}, {window}), {group})",
+  "field_pairs": [
+    {"numerator": "operating_income", "denominator": "equity"},
+    {"numerator": "net_income", "denominator": "equity"},
+    {"numerator": "free_cash_flow_per_share", "denominator": "close"}
+  ],
+  "param_ranges": {
+    "window": [63, 126, 252],
+    "group": ["subindustry", "industry", "sector"]
+  },
+  "hypothesis": "Companies with improving profitability tend to outperform; group_rank controls industry effects",
+  "source": "src_001",
+  "created": "2026-06-24",
+  "proven_examples": []
+}
 ```
 
-`credential.txt` is ignored by git. Do not commit real credentials, cookies, sessions, tokens, alpha databases, or submission results.
+The expansion engine creates `field_pairs × param_ranges` candidate expressions per template, then deduplicates against the alpha database.
 
-## Scripts
+---
 
-Preview skill evolution output without modifying files:
+## Lessons Feedback Loop
+
+`lessons.json` accumulates mining experience at the pattern level:
+
+```json
+{
+  "patterns": {
+    "profitability_trend": {
+      "tested": 12, "passed": 4, "pass_rate": 0.33,
+      "avg_sharpe": 1.52, "avg_fitness": 1.08,
+      "best": {"alpha_id": "...", "sharpe": 2.01, "expr": "..."},
+      "failure_modes": {"LOW_FITNESS": 5, "LOW_SHARPE": 3},
+      "action": "expand",
+      "notes": "..."
+    }
+  },
+  "param_insights": {
+    "window": {"63": {"avg_sharpe": 0.9, "verdict": "deprioritize"}, "126": {...}, "252": {...}}
+  }
+}
+```
+
+After each batch, `evolve_skill.py` syncs results back into `lessons.json`, which the next round's candidate generator consults to prioritize high-performing patterns and deprioritize failing ones.
+
+---
+
+## Self-Evolution Loop
 
 ```bash
-python scripts/evolve_skill.py
+# Preview new lessons from latest alpha_db changes
+python3 scripts/evolve_skill.py
+
+# Apply lessons locally
+python3 scripts/evolve_skill.py --apply
+
+# Batch submit qualified candidates
+python3 scripts/submit_batch.py
 ```
 
-Apply updates to local `SKILL.md` and `alpha_db.json` after reviewing the preview:
+### Mining Rules Distilled
 
-```bash
-python scripts/evolve_skill.py --apply
-```
+- **Fundamental fields** are the strongest starting point; `group_rank + ts_rank` with `SUBINDUSTRY` neutralization is the default baseline.
+- **Analyst expectation fields** are useful but need turnover control via modest decay and industry/subindustry neutralization.
+- **Pure technical signals** fail more often unless decay is high or mixed with slower fundamental signals.
+- **Fitness failures** are often turnover problems in disguise; decay and signal mixing are the first levers to check.
+- **Self-correlation** must be measured on daily PnL changes, not cumulative PnL curves.
+- **Low correlation** usually requires a different data source or economic logic, not just parameter tweaks.
 
-Run the batch submission example:
+---
 
-```bash
-python scripts/submit_batch.py
-```
+## Key Design Decisions
 
-The scripts require `requests` and `numpy`. `alpha_db.json` is a local memory file and is intentionally ignored by git.
+| Decision | Rationale |
+|----------|-----------|
+| Hybrid architecture (scripts + agent) | Scripts handle breadth (fast, unattended); agent handles depth (paper-inspired creativity) |
+| Batch fuel-mine loop | Alternates mining (consume templates) with fueling (read papers for new templates) |
+| Pattern-level lessons | Aggregates stats per template pattern, not per individual alpha |
+| Adaptive quality filter | Three-tier (SUBMIT/OBSERVE/DISCARD) with correlation-aware demotion/promotion |
+| Local field snapshot | 4,367 BRAIN fields cached locally for fast validation without API calls |
+| Agent CLI subprocess | 5-minute timeout, skip-on-failure, 3 consecutive failures → depth disabled |
 
-## Safety Notes
+See [`scripts/DESIGN.md`](scripts/DESIGN.md) for the full architecture document.
 
-The following files are intentionally ignored:
+---
 
-- `credential.txt`
-- `alpha_db.json`
-- `batch_submit_results.json`
-- `.env`
-- Python caches and virtual environments
+## Privacy & Security
 
-If you want to publish research lessons from local runs, summarize them into general rules before adding them to `SKILL.md`. Do not publish raw alpha IDs, PnL series, account-linked submission statuses, or private candidate expressions.
+- `credential.txt`, `alpha_db.json`, and result files are gitignored
+- Only sanitized general rules are published — never raw account-linked records
+- The repository is a reusable system, not a credential bundle
 
-## Get in Touch
+---
 
-Join the QuantML factor-research WeChat group, or scan the personal QR code to add me as a friend.
+## License
 
-| WeChat Group: QuantML Factor Research | Add Me as Friend |
-| :---: | :---: |
-| <img src="pic/20260624124943.jpg" width="300" alt="QuantML Factor Research Group QR"> | <img src="pic/20260624125220.jpg" width="300" alt="Add Friend QR"> |
+This project builds on the [wq-alpha-research](https://github.com/QuantML-Research/wq-alpha-research) skill framework.
