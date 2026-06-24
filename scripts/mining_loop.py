@@ -108,6 +108,7 @@ def load_state() -> dict[str, Any]:
         "round": 0,
         "consecutive_no_active": 0,
         "total_submitted": 0,
+        "total_submit_failed": 0,
         "total_observe": 0,
         "total_discard": 0,
         "started_at": datetime.now(timezone.utc).isoformat(),
@@ -341,6 +342,7 @@ def run_breadth_round(
     round_result: dict[str, Any] = {
         "candidate_count": len(candidates),
         "submitted": [],
+        "submit_failed": [],
         "observed": [],
         "discarded": 0,
         "errors": 0,
@@ -353,13 +355,7 @@ def run_breadth_round(
         print("[breadth] No candidates to simulate.")
         return round_result
 
-    # Batch simulate
-    logger.info("Breadth simulation start candidate_count=%s", len(candidates))
-    print(f"[breadth] Simulating {len(candidates)} candidates...")
-    results = client.batch_simulate(candidates)
-    logger.info("Breadth simulation complete result_count=%s", len(results))
-
-    # Fetch existing ACTIVE alphas' PnL for correlation
+    # Fetch existing ACTIVE alphas' PnL for correlation FIRST (before any simulation)
     active_alphas = {
         aid: a for aid, a in db.get("alphas", {}).items() if a.get("status") == "ACTIVE"
     }
@@ -372,8 +368,15 @@ def run_breadth_round(
         logger.info("Fetched active PnL alpha_id=%s records=%s usable=%s", aid, len(pnl), len(pnl) >= 50)
     logger.info("Active PnLs ready usable_count=%s", len(active_pnls))
 
-    # Process each result
-    for r in results:
+    # Keep submission/PnL checks off the simulation worker session. The original
+    # simulation client is used concurrently by worker threads during streaming.
+    action_client = BrainClient(max_concurrent=1)
+    action_client.connect()
+
+    # Stream simulate: process each result as it completes (no waiting for full batch)
+    logger.info("Breadth simulation start candidate_count=%s (streaming)", len(candidates))
+    print(f"[breadth] Simulating {len(candidates)} candidates (streaming submit)...")
+    for r in client.batch_simulate_stream(candidates):
         sim = r.get("sim_result", {})
         status = sim.get("status", "ERROR")
 
@@ -383,6 +386,8 @@ def run_breadth_round(
             round_result["error_details"].append(detail)
             logger.info("Candidate error detail=%s", json.dumps(detail, ensure_ascii=False, default=str)[:2000])
             update_lessons_from_result(lessons, r, sim)
+            save_lessons(lessons)
+            save_alpha_db(db)
             continue
 
         sim_data = sim.get("sim_data", {})
@@ -395,7 +400,7 @@ def run_breadth_round(
         # Compute correlation against existing ACTIVE alphas
         max_corr = None
         if alpha_id and active_pnls:
-            new_pnl = client.fetch_pnl(alpha_id)
+            new_pnl = action_client.fetch_pnl(alpha_id)
             logger.info("Fetched new alpha PnL alpha_id=%s records=%s", alpha_id, len(new_pnl))
             if len(new_pnl) >= 50:
                 corr_list = compute_correlation(new_pnl, {"alphas": {aid: {"pnl": p} for aid, p in active_pnls.items()}})
@@ -423,7 +428,7 @@ def run_breadth_round(
         update_lessons_from_result(lessons, r, sim, max_corr)
 
         if action == "SUBMIT":
-            round_result["submitted"].append({
+            submit_record = {
                 "alpha_id": alpha_id,
                 "expression": r.get("expression", ""),
                 "sharpe": sharpe,
@@ -431,13 +436,13 @@ def run_breadth_round(
                 "turnover": turnover,
                 "max_corr": max_corr,
                 "template_id": r.get("template_id", "unknown"),
-            })
+            }
 
             # Attempt submission
             if alpha_id:
                 logger.info("Submitting alpha alpha_id=%s sharpe=%s fitness=%s", alpha_id, sharpe, fitness)
                 print(f"  [SUBMIT] Attempting submission for {alpha_id} (Sharpe={sharpe})")
-                submit_result = client.submit_alpha(alpha_id)
+                submit_result = action_client.submit_alpha(alpha_id)
                 submit_status = submit_result.get("status", "unknown")
                 logger.info(
                     "Submit result alpha_id=%s status=%s submitted=%s status_code=%s self_correlation=%s",
@@ -448,6 +453,7 @@ def run_breadth_round(
                     submit_result.get("self_correlation"),
                 )
                 if submit_status == "ACTIVE":
+                    round_result["submitted"].append({**submit_record, "submit_status": "ACTIVE"})
                     round_result["new_active"] += 1
                     # Update DB
                     db["alphas"][alpha_id] = {
@@ -460,11 +466,12 @@ def run_breadth_round(
                         "submitted_at": datetime.now(timezone.utc).isoformat(),
                     }
                     # Add to active_pnls for subsequent correlation checks
-                    new_pnl = client.fetch_pnl(alpha_id)
+                    new_pnl = action_client.fetch_pnl(alpha_id)
                     if len(new_pnl) >= 50:
                         active_pnls[alpha_id] = new_pnl
                     print(f"  [ACTIVE] {alpha_id} activated!")
                 elif submit_status == "PENDING":
+                    round_result["submitted"].append({**submit_record, "submit_status": "PENDING"})
                     # Submission accepted but still under review — not a failure
                     db["alphas"][alpha_id] = {
                         "expression": r.get("expression", ""),
@@ -477,6 +484,12 @@ def run_breadth_round(
                     }
                     print(f"  [SUBMIT-PENDING] {alpha_id} submitted, awaiting review")
                 else:
+                    round_result["submit_failed"].append({
+                        **submit_record,
+                        "submit_status": submit_status,
+                        "status_code": submit_result.get("status_code"),
+                        "self_correlation": submit_result.get("self_correlation"),
+                    })
                     print(f"  [SUBMIT-FAIL] {alpha_id}: {submit_status}")
 
         elif action == "OBSERVE":
@@ -491,12 +504,18 @@ def run_breadth_round(
             logger.info("Candidate discarded alpha_id=%s sharpe=%s fitness=%s turnover=%s max_corr=%s", alpha_id, sharpe, fitness, turnover, max_corr)
             round_result["discarded"] += 1
 
+        # Streaming mode can submit before the full batch finishes; persist after
+        # each processed candidate so an interrupted run does not lose local state.
+        save_lessons(lessons)
+        save_alpha_db(db)
+
     # Save lessons after each round
     save_lessons(lessons)
     save_alpha_db(db)
     logger.info(
-        "Breadth round complete submitted=%s observed=%s discarded=%s errors=%s new_active=%s",
+        "Breadth round complete submitted=%s submit_failed=%s observed=%s discarded=%s errors=%s new_active=%s",
         len(round_result["submitted"]),
+        len(round_result["submit_failed"]),
         len(round_result["observed"]),
         round_result["discarded"],
         round_result["errors"],
@@ -1178,12 +1197,14 @@ def run_mining_loop(
             )
 
             state["total_submitted"] += len(round_result["submitted"])
+            state["total_submit_failed"] = state.get("total_submit_failed", 0) + len(round_result.get("submit_failed", []))
             state["total_observe"] += len(round_result["observed"])
             state["total_discard"] += round_result["discarded"]
             logger.info(
-                "Round totals updated round=%s total_submitted=%s total_observe=%s total_discard=%s",
+                "Round totals updated round=%s total_submitted=%s total_submit_failed=%s total_observe=%s total_discard=%s",
                 round_num,
                 state["total_submitted"],
+                state.get("total_submit_failed", 0),
                 state["total_observe"],
                 state["total_discard"],
             )
@@ -1191,6 +1212,8 @@ def run_mining_loop(
             print(f"\n[breadth] Round {round_num} summary:")
             print(f"  Candidates: {round_result['candidate_count']}")
             print(f"  SUBMIT: {len(round_result['submitted'])} (new ACTIVE: {new_active})")
+            if round_result.get("submit_failed"):
+                print(f"  SUBMIT-FAIL: {len(round_result['submit_failed'])}")
             print(f"  OBSERVE: {len(round_result['observed'])}")
             print(f"  DISCARD: {round_result['discarded']}")
             print(f"  ERRORS:  {round_result['errors']}")
@@ -1347,6 +1370,7 @@ def run_mining_loop(
         "ended_at": state["ended_at"],
         "total_rounds": state["round"],
         "total_submitted": state["total_submitted"],
+        "total_submit_failed": state.get("total_submit_failed", 0),
         "total_observe": state["total_observe"],
         "total_discard": state["total_discard"],
         "consecutive_no_active": state["consecutive_no_active"],
@@ -1361,10 +1385,11 @@ def run_mining_loop(
     }
     REPORT_PATH.write_text(json.dumps(report, indent=2, ensure_ascii=False), "utf-8")
     logger.info(
-        "Mining report written path=%s total_rounds=%s total_submitted=%s total_observe=%s total_discard=%s active_count=%s",
+        "Mining report written path=%s total_rounds=%s total_submitted=%s total_submit_failed=%s total_observe=%s total_discard=%s active_count=%s",
         REPORT_PATH,
         state["round"],
         state["total_submitted"],
+        state.get("total_submit_failed", 0),
         state["total_observe"],
         state["total_discard"],
         sum(1 for a in db.get("alphas", {}).values() if a.get("status") == "ACTIVE"),
@@ -1375,6 +1400,7 @@ def run_mining_loop(
     print(f"{'=' * 70}")
     print(f"  Total rounds:       {state['round']}")
     print(f"  Total SUBMIT:       {state['total_submitted']}")
+    print(f"  Total SUBMIT-FAIL:  {state.get('total_submit_failed', 0)}")
     print(f"  Total OBSERVE:      {state['total_observe']}")
     print(f"  Total DISCARD:      {state['total_discard']}")
     print(f"  Active alphas in DB: {sum(1 for a in db.get('alphas', {}).values() if a.get('status') == 'ACTIVE')}")

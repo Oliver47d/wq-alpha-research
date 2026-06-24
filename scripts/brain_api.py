@@ -470,6 +470,94 @@ class BrainClient:
         logger.info("Batch simulate complete candidate_count=%s status_counts=%s", len(candidates), status_counts)
         return results
 
+    def batch_simulate_stream(
+        self,
+        candidates: list[dict],
+        max_concurrent: int | None = None,
+        max_retries: int = 2,
+    ):
+        """Stream simulation results as they complete (generator).
+
+        Yields each result immediately when a simulation finishes,
+        enabling streaming submit during batch processing.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        concurrency = max_concurrent or self.max_concurrent
+        logger.info(
+            "Batch simulate stream start candidate_count=%s concurrency=%s max_retries=%s",
+            len(candidates),
+            concurrency,
+            max_retries,
+        )
+
+        def _run_one(idx: int, cand: dict) -> dict[str, Any]:
+            expr = cand["expression"]
+            expr_hash = _expr_fingerprint(expr)
+            settings = cand.get("settings", {})
+            for attempt in range(max_retries + 1):
+                try:
+                    sim_result = self.simulate(expr, settings)
+                except Exception as e:
+                    logger.info(
+                        "Stream simulation raised exception batch_idx=%s attempt=%s expr_hash=%s error=%s",
+                        idx,
+                        attempt + 1,
+                        expr_hash,
+                        e,
+                    )
+                    sim_result = {"status": "ERROR", "error": str(e)}
+
+                sim_result["attempts"] = attempt + 1
+                retryable = self._is_retryable_sim_error(sim_result)
+                if not retryable or attempt >= max_retries:
+                    logger.info(
+                        "Stream simulation candidate finished batch_idx=%s status=%s attempts=%s retryable=%s expr_hash=%s",
+                        idx,
+                        sim_result.get("status"),
+                        sim_result.get("attempts"),
+                        retryable,
+                        expr_hash,
+                    )
+                    return {**cand, "sim_result": sim_result, "batch_idx": idx}
+
+                sleep_s = min(30, 5 * (attempt + 1))
+                logger.info(
+                    "Stream simulation candidate retry batch_idx=%s attempt=%s/%s sleep=%ss status=%s status_code=%s error=%s expr_hash=%s",
+                    idx,
+                    attempt + 1,
+                    max_retries,
+                    sleep_s,
+                    sim_result.get("status"),
+                    sim_result.get("status_code"),
+                    sim_result.get("error"),
+                    expr_hash,
+                )
+                print(
+                    f"  [retry] transient simulation error; retrying {attempt + 1}/{max_retries} "
+                    f"after {sleep_s}s — {expr[:50]}",
+                    flush=True,
+                )
+                time.sleep(sleep_s)
+
+            return {**cand, "sim_result": sim_result, "batch_idx": idx}
+
+        completed = 0
+        total = len(candidates)
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            futures = {
+                pool.submit(_run_one, i, cand): i
+                for i, cand in enumerate(candidates)
+            }
+            for future in as_completed(futures):
+                result = future.result()
+                completed += 1
+                status = result.get("sim_result", {}).get("status", "?")
+                expr_short = result["expression"][:50]
+                print(f"  [{completed}/{total}] {status} — {expr_short}", flush=True)
+                yield result
+        logger.info("Batch simulate stream complete candidate_count=%s", len(candidates))
+
     # ----------------------------------------------------------------- #
     # Metrics & PnL
     # ----------------------------------------------------------------- #
