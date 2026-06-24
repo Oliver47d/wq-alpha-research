@@ -12,7 +12,9 @@ Implements the batch fuel-mine pattern:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -67,6 +69,25 @@ MAX_ROUNDS = 50  # safety cap
 MAX_CANDIDATES_PER_ROUND = 60
 DEPTH_BACKENDS = {"handoff", "claude", "manual", "none"}
 
+LOG_LEVEL = os.getenv("WQ_LOG_LEVEL", "INFO").upper()
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=getattr(logging, LOG_LEVEL, logging.INFO),
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
+logger = logging.getLogger(__name__)
+
+
+def _expr_fingerprint(expression: str) -> str:
+    """Stable short identifier for an expression without logging the formula."""
+    return hashlib.sha1(expression.encode("utf-8")).hexdigest()[:12]
+
+
+def _text_fingerprint(text: str) -> str | None:
+    if not text:
+        return None
+    return hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()[:12]
+
 
 # ---------------------------------------------------------------------------
 # State management
@@ -74,7 +95,15 @@ DEPTH_BACKENDS = {"handoff", "claude", "manual", "none"}
 
 def load_state() -> dict[str, Any]:
     if STATE_PATH.exists():
-        return json.loads(STATE_PATH.read_text("utf-8"))
+        state = json.loads(STATE_PATH.read_text("utf-8"))
+        logger.info(
+            "Loaded mining state round=%s consecutive_no_active=%s total_submitted=%s",
+            state.get("round"),
+            state.get("consecutive_no_active"),
+            state.get("total_submitted"),
+        )
+        return state
+    logger.info("No mining state found; initializing fresh state path=%s", STATE_PATH)
     return {
         "round": 0,
         "consecutive_no_active": 0,
@@ -88,12 +117,20 @@ def load_state() -> dict[str, Any]:
 
 def save_state(state: dict) -> None:
     STATE_PATH.write_text(json.dumps(state, indent=2, ensure_ascii=False), "utf-8")
+    logger.info(
+        "Saved mining state round=%s consecutive_no_active=%s total_submitted=%s path=%s",
+        state.get("round"),
+        state.get("consecutive_no_active"),
+        state.get("total_submitted"),
+        STATE_PATH,
+    )
 
 
 def _scan_papers_folder() -> dict[str, dict]:
     """Scan papers/ directory and return {filename: entry} for unregistered PDFs."""
     papers_dir = SKILL_DIR / "papers"
     if not papers_dir.is_dir():
+        logger.info("Papers folder not found path=%s", papers_dir)
         return {}
     entries = {}
     for pdf_file in sorted(papers_dir.glob("*.pdf")):
@@ -107,6 +144,7 @@ def _scan_papers_folder() -> dict[str, dict]:
             "type": "research_report",
             "status": "unread",
         }
+    logger.info("Scanned papers folder path=%s pdf_count=%s", papers_dir, len(entries))
     return entries
 
 
@@ -130,6 +168,12 @@ def load_papers_registry() -> dict[str, Any]:
     }
     if PAPERS_REGISTRY_PATH.exists():
         reg = json.loads(PAPERS_REGISTRY_PATH.read_text("utf-8"))
+        logger.info(
+            "Loaded papers registry total=%s consumed=%s remaining=%s",
+            reg.get("stats", {}).get("total"),
+            reg.get("stats", {}).get("consumed"),
+            reg.get("stats", {}).get("remaining"),
+        )
 
     # Auto-scan papers/ and register any new PDFs not yet in registry
     scanned = _scan_papers_folder()
@@ -149,6 +193,7 @@ def load_papers_registry() -> dict[str, Any]:
             "remaining": sum(1 for s in sources.values() if s.get("status") != "consumed"),
         }
         save_papers_registry(reg)
+        logger.info("Auto-registered new papers count=%s total=%s remaining=%s", added, reg["stats"]["total"], reg["stats"]["remaining"])
         print(f"[papers] Auto-registered {added} new PDF(s) from papers/")
 
     return reg
@@ -156,6 +201,13 @@ def load_papers_registry() -> dict[str, Any]:
 
 def save_papers_registry(reg: dict) -> None:
     PAPERS_REGISTRY_PATH.write_text(json.dumps(reg, indent=2, ensure_ascii=False), "utf-8")
+    logger.info(
+        "Saved papers registry total=%s consumed=%s remaining=%s path=%s",
+        reg.get("stats", {}).get("total"),
+        reg.get("stats", {}).get("consumed"),
+        reg.get("stats", {}).get("remaining"),
+        PAPERS_REGISTRY_PATH,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -165,12 +217,15 @@ def save_papers_registry(reg: dict) -> None:
 def build_candidates(lessons: dict, max_per_template: int = 15) -> list[dict]:
     """Expand all templates into candidates, filtered by lessons actions."""
     templates = load_templates()
+    logger.info("Build candidates start template_count=%s max_per_template=%s", len(templates), max_per_template)
     if not templates:
+        logger.info("Build candidates stopped: no templates found")
         print("[breadth] No templates found.")
         return []
 
     # Always validate fields against BRAIN reference to avoid simulation errors
     validator = FieldValidator(FIELDS_PATH)
+    logger.info("Field validator loaded field_count=%s fields_path=%s", len(validator.field_list), FIELDS_PATH)
     print(f"  [field-validator] Loaded {len(validator.field_list)} fields for validation")
 
     patterns = lessons.get("patterns", {})
@@ -182,23 +237,40 @@ def build_candidates(lessons: dict, max_per_template: int = 15) -> list[dict]:
         action = pat.get("action", "expand")
 
         if action == "skip":
+            logger.info(
+                "Template skipped template_id=%s pass_rate=%s tested=%s",
+                tid,
+                pat.get("pass_rate", 0),
+                pat.get("tested", 0),
+            )
             print(f"  [skip] {tid} (pass_rate={pat.get('pass_rate', 0):.0%}, tested={pat.get('tested', 0)})")
             continue
 
         # Deprioritize: reduce candidate count
         effective_max = max_per_template // 2 if action == "deprioritize" else max_per_template
         cands = expand_template(tmpl, max_candidates=effective_max, validator=validator)
+        logger.info(
+            "Template expanded template_id=%s action=%s effective_max=%s generated=%s",
+            tid,
+            action,
+            effective_max,
+            len(cands),
+        )
         print(f"  [expand] {tid}: {len(cands)} candidates (action={action}, max={effective_max})")
         all_candidates.extend(cands)
 
     # Deduplicate
+    before_dedup = len(all_candidates)
     all_candidates = deduplicate(all_candidates)
+    logger.info("Candidates deduplicated before=%s after=%s", before_dedup, len(all_candidates))
 
     # Cap total
     if len(all_candidates) > MAX_CANDIDATES_PER_ROUND:
         all_candidates = all_candidates[:MAX_CANDIDATES_PER_ROUND]
+        logger.info("Candidates capped max=%s", MAX_CANDIDATES_PER_ROUND)
         print(f"  [cap] Truncated to {MAX_CANDIDATES_PER_ROUND} candidates")
 
+    logger.info("Build candidates complete candidate_count=%s", len(all_candidates))
     return all_candidates
 
 
@@ -212,19 +284,50 @@ def _compact_json(value: Any, max_chars: int = 2000) -> Any:
     return text[:max_chars] + "...[truncated]"
 
 
+def _sim_data_summary(sim_data: Any) -> dict[str, Any] | None:
+    """Keep persisted error details useful without storing full API payloads."""
+    if not isinstance(sim_data, dict):
+        return None
+
+    summary: dict[str, Any] = {}
+    for key in ("status", "alpha", "alpha_id", "id", "message"):
+        if key in sim_data:
+            summary[key] = sim_data[key]
+
+    checks = sim_data.get("is", {}).get("checks") if isinstance(sim_data.get("is"), dict) else sim_data.get("checks")
+    if isinstance(checks, list):
+        summary["checks"] = [
+            {
+                "name": c.get("name"),
+                "result": c.get("result"),
+                "limit": c.get("limit"),
+                "value": c.get("value"),
+            }
+            for c in checks
+            if isinstance(c, dict)
+        ]
+
+    return summary or None
+
+
 def _error_detail(result: dict[str, Any], sim: dict[str, Any]) -> dict[str, Any]:
+    expression = result.get("expression", "")
+    settings = result.get("settings", {})
+    error_text = str(sim.get("error", "") or "")
     return {
         "batch_idx": result.get("batch_idx"),
-        "expression": result.get("expression", ""),
+        "expression_hash": _expr_fingerprint(expression) if expression else None,
+        "expression_len": len(expression),
         "template_id": result.get("template_id", "unknown"),
-        "settings": result.get("settings", {}),
+        "settings_keys": sorted(settings.keys()) if isinstance(settings, dict) else [],
         "status": sim.get("status"),
         "status_code": sim.get("status_code"),
-        "error": sim.get("error"),
+        "error_len": len(error_text),
+        "error_hash": _text_fingerprint(error_text),
         "attempts": sim.get("attempts"),
         "simulation_id": sim.get("simulation_id"),
         "alpha_id": sim.get("alpha_id"),
-        "sim_data": _compact_json(sim.get("sim_data")),
+        "sim_data_summary": _compact_json(_sim_data_summary(sim.get("sim_data"))),
     }
 
 
@@ -246,22 +349,28 @@ def run_breadth_round(
     }
 
     if not candidates:
+        logger.info("Breadth round skipped: no candidates")
         print("[breadth] No candidates to simulate.")
         return round_result
 
     # Batch simulate
+    logger.info("Breadth simulation start candidate_count=%s", len(candidates))
     print(f"[breadth] Simulating {len(candidates)} candidates...")
     results = client.batch_simulate(candidates)
+    logger.info("Breadth simulation complete result_count=%s", len(results))
 
     # Fetch existing ACTIVE alphas' PnL for correlation
     active_alphas = {
         aid: a for aid, a in db.get("alphas", {}).items() if a.get("status") == "ACTIVE"
     }
+    logger.info("Fetching active PnLs for correlation active_count=%s", len(active_alphas))
     active_pnls: dict[str, list[float]] = {}
     for aid in active_alphas:
         pnl = client.fetch_pnl(aid)
         if len(pnl) >= 50:
             active_pnls[aid] = pnl
+        logger.info("Fetched active PnL alpha_id=%s records=%s usable=%s", aid, len(pnl), len(pnl) >= 50)
+    logger.info("Active PnLs ready usable_count=%s", len(active_pnls))
 
     # Process each result
     for r in results:
@@ -270,7 +379,9 @@ def run_breadth_round(
 
         if status != "COMPLETE":
             round_result["errors"] += 1
-            round_result["error_details"].append(_error_detail(r, sim))
+            detail = _error_detail(r, sim)
+            round_result["error_details"].append(detail)
+            logger.info("Candidate error detail=%s", json.dumps(detail, ensure_ascii=False, default=str)[:2000])
             update_lessons_from_result(lessons, r, sim)
             continue
 
@@ -285,13 +396,28 @@ def run_breadth_round(
         max_corr = None
         if alpha_id and active_pnls:
             new_pnl = client.fetch_pnl(alpha_id)
+            logger.info("Fetched new alpha PnL alpha_id=%s records=%s", alpha_id, len(new_pnl))
             if len(new_pnl) >= 50:
                 corr_list = compute_correlation(new_pnl, {"alphas": {aid: {"pnl": p} for aid, p in active_pnls.items()}})
                 if corr_list:
                     max_corr = max(abs(c.get("correlation", 0)) for c in corr_list)
+            logger.info("Correlation computed alpha_id=%s max_corr=%s active_compare_count=%s", alpha_id, max_corr, len(active_pnls))
 
         # Quality filter
         action = quality_filter(sharpe, fitness, turnover, max_corr)
+        expression = r.get("expression", "")
+        logger.info(
+            "Candidate classified alpha_id=%s action=%s sharpe=%s fitness=%s turnover=%s max_corr=%s template_id=%s expr_hash=%s expr_len=%s",
+            alpha_id,
+            action,
+            sharpe,
+            fitness,
+            turnover,
+            max_corr,
+            r.get("template_id", "unknown"),
+            _expr_fingerprint(expression) if expression else None,
+            len(expression),
+        )
 
         # Update lessons
         update_lessons_from_result(lessons, r, sim, max_corr)
@@ -309,9 +435,18 @@ def run_breadth_round(
 
             # Attempt submission
             if alpha_id:
+                logger.info("Submitting alpha alpha_id=%s sharpe=%s fitness=%s", alpha_id, sharpe, fitness)
                 print(f"  [SUBMIT] Attempting submission for {alpha_id} (Sharpe={sharpe})")
                 submit_result = client.submit_alpha(alpha_id)
                 submit_status = submit_result.get("status", "unknown")
+                logger.info(
+                    "Submit result alpha_id=%s status=%s submitted=%s status_code=%s self_correlation=%s",
+                    alpha_id,
+                    submit_status,
+                    submit_result.get("submitted"),
+                    submit_result.get("status_code"),
+                    submit_result.get("self_correlation"),
+                )
                 if submit_status == "ACTIVE":
                     round_result["new_active"] += 1
                     # Update DB
@@ -345,6 +480,7 @@ def run_breadth_round(
                     print(f"  [SUBMIT-FAIL] {alpha_id}: {submit_status}")
 
         elif action == "OBSERVE":
+            logger.info("Candidate observed alpha_id=%s sharpe=%s fitness=%s", alpha_id, sharpe, fitness)
             round_result["observed"].append({
                 "alpha_id": alpha_id,
                 "expression": r.get("expression", ""),
@@ -352,11 +488,20 @@ def run_breadth_round(
                 "fitness": fitness,
             })
         else:
+            logger.info("Candidate discarded alpha_id=%s sharpe=%s fitness=%s turnover=%s max_corr=%s", alpha_id, sharpe, fitness, turnover, max_corr)
             round_result["discarded"] += 1
 
     # Save lessons after each round
     save_lessons(lessons)
     save_alpha_db(db)
+    logger.info(
+        "Breadth round complete submitted=%s observed=%s discarded=%s errors=%s new_active=%s",
+        len(round_result["submitted"]),
+        len(round_result["observed"]),
+        round_result["discarded"],
+        round_result["errors"],
+        round_result["new_active"],
+    )
 
     return round_result
 
@@ -373,9 +518,11 @@ def load_skill_knowledge() -> str:
     """
     skill_path = SKILL_DIR / "SKILL.md"
     if not skill_path.exists():
+        logger.info("SKILL.md not found path=%s", skill_path)
         return "(SKILL.md not found)"
 
     text = skill_path.read_text("utf-8", errors="ignore")
+    logger.info("Loaded SKILL.md for depth prompt path=%s chars=%s", skill_path, len(text))
 
     sections: list[str] = []
 
@@ -395,9 +542,12 @@ def load_skill_knowledge() -> str:
         sections.append("### CORE EXPERIENCE (ONE-LINERS)\n" + sec10)
 
     if not sections:
+        logger.info("No relevant SKILL.md sections found for depth prompt")
         return "(No relevant sections found in SKILL.md)"
 
-    return "\n\n".join(sections)
+    knowledge = "\n\n".join(sections)
+    logger.info("Prepared SKILL.md depth knowledge sections=%s chars=%s", len(sections), len(knowledge))
+    return knowledge
 
 
 def _extract_section(text: str, start_marker: str, end_marker: str) -> str:
@@ -415,7 +565,14 @@ def get_next_paper(reg: dict) -> str | None:
     """Find the next unread paper source ID."""
     for src_id, src in reg.get("sources", {}).items():
         if src.get("status") == "unread":
+            logger.info(
+                "Next unread paper selected source_id=%s title=%s locator=%s",
+                src_id,
+                src.get("title"),
+                src.get("locator"),
+            )
             return src_id
+    logger.info("No unread paper source found")
     return None
 
 
@@ -432,6 +589,14 @@ def create_depth_request(src_id: str, reg: dict, lessons: dict, reason: str) -> 
     """Create a handoff task for the outer Trae Agent/subagent depth phase."""
     src = reg["sources"][src_id]
     existing_templates = sorted(p.name for p in TEMPLATES_DIR.glob("*.json"))
+    logger.info(
+        "Creating depth handoff request source_id=%s reason=%s title=%s locator=%s existing_template_count=%s",
+        src_id,
+        reason,
+        src.get("title", src.get("locator", "")),
+        src.get("locator", ""),
+        len(existing_templates),
+    )
     request = {
         "status": "NEED_AGENT",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -486,6 +651,13 @@ def create_depth_request(src_id: str, reg: dict, lessons: dict, reason: str) -> 
     reg["sources"][src_id]["request_date"] = request["created_at"]
     _refresh_registry_stats(reg)
     save_papers_registry(reg)
+    logger.info(
+        "Depth handoff request written source_id=%s request_path=%s response_path=%s remaining_papers=%s",
+        src_id,
+        DEPTH_REQUEST_PATH,
+        DEPTH_RESPONSE_PATH,
+        reg.get("stats", {}).get("remaining"),
+    )
     return request
 
 
@@ -495,11 +667,13 @@ def consume_depth_response(reg: dict) -> str:
     Returns: absent | consumed | blocked.
     """
     if not DEPTH_RESPONSE_PATH.exists():
+        logger.info("No depth response found path=%s", DEPTH_RESPONSE_PATH)
         return "absent"
 
     try:
         response = json.loads(DEPTH_RESPONSE_PATH.read_text("utf-8"))
     except json.JSONDecodeError as e:
+        logger.info("Depth response blocked: invalid JSON path=%s error=%s", DEPTH_RESPONSE_PATH, e)
         print(f"[depth] Invalid depth response JSON: {e}")
         return "blocked"
 
@@ -508,22 +682,35 @@ def consume_depth_response(reg: dict) -> str:
         try:
             pending_request = json.loads(DEPTH_REQUEST_PATH.read_text("utf-8"))
         except json.JSONDecodeError as e:
+            logger.info("Depth response blocked: invalid pending request path=%s error=%s", DEPTH_REQUEST_PATH, e)
             print(f"[depth] Invalid pending depth request JSON: {e}")
             return "blocked"
     else:
+        logger.info("Depth response blocked: response exists without request response_path=%s", DEPTH_RESPONSE_PATH)
         print("[depth] depth_response.json exists without a matching depth_request.json.")
         return "blocked"
 
     if response.get("status") != "DONE":
+        logger.info(
+            "Depth response blocked: non-DONE status=%s source_id=%s",
+            response.get("status"),
+            response.get("source_id"),
+        )
         print(f"[depth] Found depth response with status={response.get('status')}; leaving it untouched.")
         return "blocked"
 
     src_id = response.get("source_id")
     if not src_id or src_id not in reg.get("sources", {}):
+        logger.info("Depth response blocked: invalid source_id=%s", src_id)
         print(f"[depth] Invalid depth response source_id: {src_id}")
         return "blocked"
 
     if pending_request.get("source_id") != src_id:
+        logger.info(
+            "Depth response blocked: source mismatch response_source_id=%s request_source_id=%s",
+            src_id,
+            pending_request.get("source_id"),
+        )
         print(
             "[depth] Depth response source_id does not match pending request: "
             f"response={src_id}, request={pending_request.get('source_id')}"
@@ -532,6 +719,7 @@ def consume_depth_response(reg: dict) -> str:
 
     created_templates = response.get("created_templates", [])
     if not isinstance(created_templates, list):
+        logger.info("Depth response blocked: created_templates is not list type=%s", type(created_templates).__name__)
         print("[depth] Invalid depth response: created_templates must be a list")
         return "blocked"
 
@@ -540,18 +728,22 @@ def consume_depth_response(reg: dict) -> str:
     existing_templates = set(pending_request.get("existing_templates", []))
     for name in created_templates:
         if not isinstance(name, str):
+            logger.info("Depth response blocked: non-string template name=%r", name)
             print(f"[depth] Invalid template name in response: {name!r}")
             return "blocked"
         filename = name if str(name).endswith(".json") else f"{name}.json"
         if filename in existing_templates:
+            logger.info("Depth response blocked: pre-existing template referenced filename=%s", filename)
             print(f"[depth] Depth response references pre-existing template: {filename}")
             return "blocked"
         if Path(filename).name != filename:
+            logger.info("Depth response blocked: invalid template path filename=%s", filename)
             print(f"[depth] Invalid template path in response: {filename}")
             return "blocked"
         template_path = (TEMPLATES_DIR / filename).resolve()
         templates_root = TEMPLATES_DIR.resolve()
         if template_path.parent != templates_root:
+            logger.info("Depth response blocked: template escapes directory filename=%s resolved=%s", filename, template_path)
             print(f"[depth] Template path escapes templates directory: {filename}")
             return "blocked"
         if template_path.exists():
@@ -559,6 +751,7 @@ def consume_depth_response(reg: dict) -> str:
         else:
             missing.append(filename)
     if missing:
+        logger.info("Depth response blocked: missing template files=%s", missing)
         print(f"[depth] Depth response references missing template files: {missing}")
         return "blocked"
 
@@ -576,6 +769,12 @@ def consume_depth_response(reg: dict) -> str:
     if DEPTH_REQUEST_PATH.exists():
         DEPTH_REQUEST_PATH.unlink()
 
+    logger.info(
+        "Depth response consumed source_id=%s created_templates=%s response_path=%s",
+        src_id,
+        normalized_templates,
+        DEPTH_RESPONSE_PATH,
+    )
     print(f"[depth] Consumed depth response for {src_id}: {normalized_templates}")
     return "consumed"
 
@@ -590,6 +789,13 @@ def fuel_one_paper(src_id: str, reg: dict, lessons: dict) -> bool:
     locator = src.get("locator", "")
     title = src.get("title", locator)
 
+    logger.info(
+        "Depth claude fuel start source_id=%s title=%s type=%s locator=%s",
+        src_id,
+        title,
+        src_type,
+        locator,
+    )
     print(f"\n[depth] Fueling from paper: {title} ({src_type})")
 
     # Load SKILL.md knowledge for the prompt
@@ -599,6 +805,7 @@ def fuel_one_paper(src_id: str, reg: dict, lessons: dict) -> bool:
     # List existing templates so Agent avoids duplicates
     existing_templates = [p.stem for p in TEMPLATES_DIR.glob("*.json")]
     existing_list = ", ".join(existing_templates) if existing_templates else "(none)"
+    logger.info("Depth claude existing templates count=%s", len(existing_templates))
 
     # Snapshot templates BEFORE agent runs (fix: was computed after agent ran)
     templates_before = set(p.name for p in TEMPLATES_DIR.glob("*.json"))
@@ -678,6 +885,7 @@ Output the filenames you created."""
     # Write prompt to a temp file
     prompt_file = SKILL_DIR / "._fuel_prompt.txt"
     prompt_file.write_text(prompt, "utf-8")
+    logger.info("Depth claude prompt written path=%s chars=%s", prompt_file, len(prompt))
 
     # Try calling the agent CLI
     # We try multiple approaches since the exact CLI may vary
@@ -687,6 +895,7 @@ Output the filenames you created."""
 
     for cmd_template in agent_commands:
         try:
+            logger.info("Depth claude command start source_id=%s command=%s timeout=%s", src_id, cmd_template[0], AGENT_TIMEOUT)
             # Use subprocess with timeout
             result = subprocess.run(
                 cmd_template[0:1] + cmd_template[1:],
@@ -697,6 +906,7 @@ Output the filenames you created."""
             )
             if result.returncode == 0:
                 output = result.stdout.strip()
+                logger.info("Depth claude command succeeded source_id=%s stdout_chars=%s stderr_chars=%s", src_id, len(result.stdout), len(result.stderr))
                 print(f"  [depth] Agent output: {output[:200]}...")
 
                 # Check if new template files were created (templates_before was snapshotted before agent ran)
@@ -704,6 +914,7 @@ Output the filenames you created."""
                 new_templates = templates_after - templates_before
 
                 if new_templates:
+                    logger.info("Depth claude created templates source_id=%s new_templates=%s", src_id, sorted(new_templates))
                     print(f"  [depth] New templates created: {new_templates}")
                     # Mark paper as consumed
                     reg["sources"][src_id]["status"] = "consumed"
@@ -715,6 +926,7 @@ Output the filenames you created."""
                     save_papers_registry(reg)
                     return True
                 else:
+                    logger.info("Depth claude completed without new templates source_id=%s", src_id)
                     print(f"  [depth] Agent ran but no new template files detected")
                     # Still mark as consumed to avoid re-reading
                     reg["sources"][src_id]["status"] = "consumed"
@@ -724,19 +936,29 @@ Output the filenames you created."""
                     save_papers_registry(reg)
                     return False
             else:
+                logger.info(
+                    "Depth claude command failed source_id=%s returncode=%s stderr=%s",
+                    src_id,
+                    result.returncode,
+                    result.stderr[:500],
+                )
                 print(f"  [depth] Agent exited with code {result.returncode}: {result.stderr[:200]}")
                 continue
         except subprocess.TimeoutExpired:
+            logger.info("Depth claude command timed out source_id=%s timeout=%s", src_id, AGENT_TIMEOUT)
             print(f"  [depth] Agent timed out after {AGENT_TIMEOUT}s")
             continue
         except FileNotFoundError:
+            logger.info("Depth claude command not found executable=%s source_id=%s", cmd_template[0], src_id)
             print(f"  [depth] Agent CLI not found: {cmd_template[0]}")
             continue
         except Exception as e:
+            logger.info("Depth claude command exception source_id=%s error=%s", src_id, e)
             print(f"  [depth] Agent error: {e}")
             continue
 
     # If we get here, all agent attempts failed
+    logger.info("Depth claude unavailable source_id=%s prompt_path=%s", src_id, prompt_file)
     print(f"  [depth] Claude CLI unavailable. Prompt saved to {prompt_file}")
     print(f"  [depth] To fuel manually: copy the prompt to Mira Agent or another LLM")
     print(f"  [depth] The prompt includes SKILL.md knowledge ({len(skill_knowledge)} chars) + lessons context")
@@ -757,6 +979,7 @@ def fuel_one_paper_manual(src_id: str, reg: dict, lessons: dict) -> bool:
     src_type = src.get("type", "unknown")
     locator = src.get("locator", "")
 
+    logger.info("Depth manual start source_id=%s type=%s locator=%s", src_id, src_type, locator)
     print(f"\n[depth-manual] Attempting manual extraction from: {locator}")
 
     if src_type == "pdf" or src_type == "markdown":
@@ -765,12 +988,14 @@ def fuel_one_paper_manual(src_id: str, reg: dict, lessons: dict) -> bool:
         if not path.is_absolute():
             path = SKILL_DIR / locator
         if not path.exists():
+            logger.info("Depth manual file missing source_id=%s path=%s", src_id, path)
             print(f"  [manual] File not found: {path}")
             return False
 
         try:
             text = path.read_text("utf-8", errors="ignore")[:10000]
         except Exception as e:
+            logger.info("Depth manual read failed source_id=%s path=%s error=%s", src_id, path, e)
             print(f"  [manual] Failed to read: {e}")
             return False
 
@@ -784,9 +1009,11 @@ def fuel_one_paper_manual(src_id: str, reg: dict, lessons: dict) -> bool:
         reg["stats"]["consumed"] = reg["stats"].get("consumed", 0) + 1
         reg["stats"]["remaining"] = max(0, reg["stats"].get("total", 0) - reg["stats"]["consumed"])
         save_papers_registry(reg)
+        logger.info("Depth manual consumed source_id=%s chars=%s", src_id, len(text))
         return False
 
     # For web/feishu sources, we can't easily fetch without tools
+    logger.info("Depth manual unsupported source type source_id=%s type=%s", src_id, src_type)
     print(f"  [manual] Cannot extract from {src_type} source without Agent CLI")
     return False
 
@@ -799,10 +1026,15 @@ def should_terminate(state: dict, reg: dict, has_candidates: bool) -> tuple[bool
     """Check termination conditions."""
     # Check round cap
     if state["round"] >= MAX_ROUNDS:
+        logger.info("Termination triggered: max rounds round=%s max_rounds=%s", state["round"], MAX_ROUNDS)
         return True, f"Reached max rounds ({MAX_ROUNDS})"
 
     # Check consecutive no-active
     if state["consecutive_no_active"] >= 3:
+        logger.info(
+            "Termination triggered: consecutive no-active count=%s",
+            state["consecutive_no_active"],
+        )
         return True, (
             "3 consecutive rounds with no new ACTIVE alphas. "
             "Tip: run with --reset-state to start fresh."
@@ -811,8 +1043,16 @@ def should_terminate(state: dict, reg: dict, has_candidates: bool) -> tuple[bool
     # Check candidate pool + papers
     remaining = reg.get("stats", {}).get("remaining", 0)
     if not has_candidates and remaining == 0:
+        logger.info("Termination triggered: no candidates and no remaining papers")
         return True, "Candidate pool empty and no unread papers remaining"
 
+    logger.info(
+        "Termination check passed round=%s consecutive_no_active=%s has_candidates=%s remaining_papers=%s",
+        state.get("round"),
+        state.get("consecutive_no_active"),
+        has_candidates,
+        remaining,
+    )
     return False, ""
 
 
@@ -832,6 +1072,13 @@ def run_mining_loop(
     if depth_backend not in DEPTH_BACKENDS:
         raise ValueError(f"Invalid depth backend: {depth_backend}")
 
+    logger.info(
+        "Mining loop start max_rounds=%s dry_run=%s depth_backend=%s skill_dir=%s",
+        MAX_ROUNDS,
+        dry_run,
+        depth_backend,
+        SKILL_DIR,
+    )
     print("=" * 70)
     print("  WorldQuant BRAIN — Automatic Alpha Discovery System")
     print("=" * 70)
@@ -848,14 +1095,24 @@ def run_mining_loop(
     db = load_alpha_db()
     reg = load_papers_registry()
     depth_response_status = consume_depth_response(reg)
+    logger.info(
+        "Initial context loaded state_round=%s lessons_patterns=%s db_alphas=%s registry_remaining=%s depth_response_status=%s",
+        state.get("round"),
+        len(lessons.get("patterns", {})),
+        len(db.get("alphas", {})),
+        reg.get("stats", {}).get("remaining"),
+        depth_response_status,
+    )
 
     if depth_backend == "handoff" and depth_response_status == "blocked":
+        logger.info("Mining loop stopped: blocked handoff response response_path=%s", DEPTH_RESPONSE_PATH)
         print("\n[depth] A depth_response.json file exists but could not be safely consumed.")
         print(f"  Response: {DEPTH_RESPONSE_PATH}")
         print("  Fix or remove the response file before rerunning mining_loop.py.")
         return
 
     if depth_backend == "handoff" and DEPTH_REQUEST_PATH.exists() and not DEPTH_RESPONSE_PATH.exists():
+        logger.info("Mining loop stopped: pending handoff request request_path=%s", DEPTH_REQUEST_PATH)
         print("\n[depth] Existing handoff request is pending.")
         print(f"  Request:  {DEPTH_REQUEST_PATH}")
         print(f"  Response: {DEPTH_RESPONSE_PATH}")
@@ -870,18 +1127,22 @@ def run_mining_loop(
         client = BrainClient()
         try:
             client.connect()
+            logger.info("Mining loop connected to BRAIN API")
             print("[init] Connected successfully.")
         except Exception as e:
+            logger.info("Mining loop failed to connect to BRAIN API error=%s", e)
             print(f"[init] FATAL: Failed to connect to BRAIN API: {e}")
             sys.exit(1)
     else:
         client = None  # type: ignore
+        logger.info("Mining loop running in dry-run mode")
         print("[init] Dry run mode — no API calls will be made.")
 
     # Main loop
     while True:
         state["round"] += 1
         round_num = state["round"]
+        logger.info("Round start round=%s", round_num)
         print(f"\n{'─' * 70}")
         print(f"  ROUND {round_num}")
         print(f"{'─' * 70}")
@@ -890,6 +1151,7 @@ def run_mining_loop(
         print("\n[breadth] Building candidates from templates...")
         candidates = build_candidates(lessons)
         has_candidates = len(candidates) > 0
+        logger.info("Round candidates built round=%s candidate_count=%s", round_num, len(candidates))
 
         round_data: dict[str, Any] = {
             "round": round_num,
@@ -899,6 +1161,7 @@ def run_mining_loop(
 
         if has_candidates and not dry_run:
             # Run breadth round
+            logger.info("Round breadth execution start round=%s candidate_count=%s", round_num, len(candidates))
             round_result = run_breadth_round(client, candidates, lessons, db)
             round_data.update(round_result)
 
@@ -907,10 +1170,23 @@ def run_mining_loop(
                 state["consecutive_no_active"] = 0
             else:
                 state["consecutive_no_active"] += 1
+            logger.info(
+                "Round no-active state updated round=%s new_active=%s consecutive_no_active=%s",
+                round_num,
+                new_active,
+                state["consecutive_no_active"],
+            )
 
             state["total_submitted"] += len(round_result["submitted"])
             state["total_observe"] += len(round_result["observed"])
             state["total_discard"] += round_result["discarded"]
+            logger.info(
+                "Round totals updated round=%s total_submitted=%s total_observe=%s total_discard=%s",
+                round_num,
+                state["total_submitted"],
+                state["total_observe"],
+                state["total_discard"],
+            )
 
             print(f"\n[breadth] Round {round_num} summary:")
             print(f"  Candidates: {round_result['candidate_count']}")
@@ -920,6 +1196,7 @@ def run_mining_loop(
             print(f"  ERRORS:  {round_result['errors']}")
 
         elif dry_run and has_candidates:
+            logger.info("Round dry-run candidate preview round=%s candidate_count=%s", round_num, len(candidates))
             print(f"\n[dry-run] Would simulate {len(candidates)} candidates")
             for i, c in enumerate(candidates[:5]):
                 print(f"  [{i+1}] {c.get('expression', '?')[:80]}")
@@ -928,12 +1205,14 @@ def run_mining_loop(
             round_data["dry_run"] = True
 
         else:
+            logger.info("Round generated no candidates round=%s", round_num)
             print("\n[breadth] No candidates generated.")
             round_data["candidate_count"] = 0
 
         # ── CHECK TERMINATION ──
         should_stop, reason = should_terminate(state, reg, has_candidates)
         if should_stop:
+            logger.info("Round terminating round=%s reason=%s", round_num, reason)
             print(f"\n[terminate] {reason}")
             round_data["termination_reason"] = reason
             state["rounds"].append(round_data)
@@ -944,23 +1223,34 @@ def run_mining_loop(
         if not has_candidates:
             next_paper = get_next_paper(reg)
             if next_paper:
+                logger.info(
+                    "Depth triggered round=%s source_id=%s backend=%s dry_run=%s",
+                    round_num,
+                    next_paper,
+                    depth_backend,
+                    dry_run,
+                )
                 print(f"\n[depth] Candidate pool empty. Reading next paper: {next_paper}")
                 fueled = False
 
                 if dry_run:
                     if depth_backend == "none":
+                        logger.info("Dry-run depth disabled round=%s source_id=%s", round_num, next_paper)
                         print("[dry-run] Depth backend disabled; would not read paper.")
                         round_data["depth_triggered"] = False
                     elif depth_backend == "handoff":
+                        logger.info("Dry-run would create handoff request round=%s source_id=%s", round_num, next_paper)
                         print(f"[dry-run] Would create depth handoff request for {next_paper}")
                         round_data["depth_triggered"] = True
                     else:
+                        logger.info("Dry-run would run depth extraction round=%s source_id=%s backend=%s", round_num, next_paper, depth_backend)
                         print(f"[dry-run] Would extract depth source {next_paper} using backend={depth_backend}")
                         round_data["depth_triggered"] = True
                     round_data["depth_backend"] = depth_backend
                     round_data["paper_read"] = next_paper
                     state["rounds"].append(round_data)
                     save_state(state)
+                    logger.info("Dry-run exits after depth preview round=%s", round_num)
                     return
 
                 if depth_backend == "handoff":
@@ -976,6 +1266,12 @@ def run_mining_loop(
                     round_data["depth_request"] = str(DEPTH_REQUEST_PATH)
                     state["rounds"].append(round_data)
                     save_state(state)
+                    logger.info(
+                        "Depth handoff created and loop paused round=%s source_id=%s request_path=%s",
+                        round_num,
+                        next_paper,
+                        DEPTH_REQUEST_PATH,
+                    )
                     print("\n[depth] Handoff request created.")
                     print(f"  Source:   {request['source_id']} — {request['paper']['title']}")
                     print(f"  Request:  {DEPTH_REQUEST_PATH}")
@@ -984,6 +1280,7 @@ def run_mining_loop(
                     return
 
                 if depth_backend == "none":
+                    logger.info("Depth backend disabled; loop exits round=%s source_id=%s", round_num, next_paper)
                     print("[depth] Depth backend disabled; skipping paper extraction.")
                     round_data["depth_triggered"] = False
                     round_data["depth_backend"] = "none"
@@ -994,13 +1291,24 @@ def run_mining_loop(
                 # Try Agent CLI first
                 if depth_backend == "claude" and agent_failures < MAX_AGENT_FAILURES:
                     try:
+                        logger.info("Depth claude backend run round=%s source_id=%s agent_failures=%s", round_num, next_paper, agent_failures)
                         fueled = fuel_one_paper(next_paper, reg, lessons)
+                        logger.info("Depth claude backend result round=%s source_id=%s fueled=%s", round_num, next_paper, fueled)
                     except Exception as e:
+                        logger.info("Depth claude backend exception round=%s source_id=%s error=%s", round_num, next_paper, e)
                         print(f"  [depth] Agent exception: {e}")
                         agent_failures += 1
 
                 # Fallback to manual
                 if depth_backend == "manual" or (not fueled and agent_failures >= MAX_AGENT_FAILURES):
+                    logger.info(
+                        "Depth manual fallback run round=%s source_id=%s backend=%s agent_failures=%s fueled=%s",
+                        round_num,
+                        next_paper,
+                        depth_backend,
+                        agent_failures,
+                        fueled,
+                    )
                     print(f"\n[depth] Agent failed {agent_failures} times. Falling back to manual extraction.")
                     fuel_one_paper_manual(next_paper, reg, lessons)
 
@@ -1011,6 +1319,7 @@ def run_mining_loop(
                 # After reading a paper, continue to next breadth round
                 # (templates may have been added)
             else:
+                logger.info("Terminating: no unread papers and no candidates round=%s", round_num)
                 print(f"\n[terminate] No unread papers remaining and candidate pool empty.")
                 round_data["termination_reason"] = "No unread papers and empty candidate pool"
                 state["rounds"].append(round_data)
@@ -1019,15 +1328,18 @@ def run_mining_loop(
         # Save state after each round
         state["rounds"].append(round_data)
         save_state(state)
+        logger.info("Round saved round=%s", round_num)
 
         # Brief pause between rounds
         if not dry_run:
+            logger.info("Round pause before next round seconds=5")
             print("\n[loop] Pausing 5s before next round...")
             time.sleep(5)
 
     # ── FINAL REPORT ──
     state["ended_at"] = datetime.now(timezone.utc).isoformat()
     save_state(state)
+    logger.info("Mining loop finalizing total_rounds=%s", state["round"])
 
     # Generate mining report
     report = {
@@ -1048,6 +1360,15 @@ def run_mining_loop(
         },
     }
     REPORT_PATH.write_text(json.dumps(report, indent=2, ensure_ascii=False), "utf-8")
+    logger.info(
+        "Mining report written path=%s total_rounds=%s total_submitted=%s total_observe=%s total_discard=%s active_count=%s",
+        REPORT_PATH,
+        state["round"],
+        state["total_submitted"],
+        state["total_observe"],
+        state["total_discard"],
+        sum(1 for a in db.get("alphas", {}).values() if a.get("status") == "ACTIVE"),
+    )
 
     print(f"\n{'=' * 70}")
     print("  MINING COMPLETE")
@@ -1089,9 +1410,17 @@ def main():
         help="Depth extraction backend. handoff creates depth_request.json for the outer Agent/subagent.",
     )
     args = parser.parse_args()
+    logger.info(
+        "CLI args parsed max_rounds=%s dry_run=%s reset_state=%s depth_backend=%s",
+        args.max_rounds,
+        args.dry_run,
+        args.reset_state,
+        args.depth_backend,
+    )
 
     if args.reset_state and STATE_PATH.exists():
         STATE_PATH.unlink()
+        logger.info("Mining state reset path=%s", STATE_PATH)
         print("[init] Mining state reset.")
 
     run_mining_loop(

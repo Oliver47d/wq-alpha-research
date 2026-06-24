@@ -10,7 +10,9 @@ Usage:
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import os
 import time
 from datetime import datetime, timezone
@@ -31,6 +33,14 @@ ALPHA_DB_PATH = SKILL_DIR / "alpha_db.json"
 LESSONS_PATH = SKILL_DIR / "lessons.json"
 
 API_BASE = "https://api.worldquantbrain.com"
+
+LOG_LEVEL = os.getenv("WQ_LOG_LEVEL", "INFO").upper()
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=getattr(logging, LOG_LEVEL, logging.INFO),
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
+logger = logging.getLogger(__name__)
 
 HEADERS = {
     "Accept": "application/json;version=2.0",
@@ -53,6 +63,17 @@ DEFAULT_SETTINGS = {
 }
 
 
+def _expr_fingerprint(expression: str) -> str:
+    """Stable short identifier for an expression without logging the formula."""
+    return hashlib.sha1(expression.encode("utf-8")).hexdigest()[:12]
+
+
+def _text_fingerprint(text: str) -> str | None:
+    if not text:
+        return None
+    return hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()[:12]
+
+
 # --------------------------------------------------------------------------- #
 # Credentials
 # --------------------------------------------------------------------------- #
@@ -60,10 +81,13 @@ def load_credentials() -> tuple[str, str]:
     env_user = os.getenv("WQ_BRAIN_USERNAME")
     env_password = os.getenv("WQ_BRAIN_PASSWORD")
     if env_user and env_password:
+        logger.info("Loaded BRAIN credentials from environment")
         return env_user, env_password
     if CREDENTIAL_PATH.exists():
         username, password = json.loads(CREDENTIAL_PATH.read_text(encoding="utf-8"))
+        logger.info("Loaded BRAIN credentials from credential file path=%s", CREDENTIAL_PATH)
         return str(username), str(password)
+    logger.info("BRAIN credentials not found env_present=%s credential_path=%s", bool(env_user or env_password), CREDENTIAL_PATH)
     raise FileNotFoundError(
         "BRAIN credentials not found. Set WQ_BRAIN_USERNAME/WQ_BRAIN_PASSWORD "
         'or create credential.txt with ["username", "password"].'
@@ -75,24 +99,32 @@ def load_credentials() -> tuple[str, str]:
 # --------------------------------------------------------------------------- #
 def load_alpha_db() -> dict[str, Any]:
     if ALPHA_DB_PATH.exists():
-        return json.loads(ALPHA_DB_PATH.read_text(encoding="utf-8"))
+        db = json.loads(ALPHA_DB_PATH.read_text(encoding="utf-8"))
+        logger.info("Loaded alpha DB path=%s alpha_count=%s", ALPHA_DB_PATH, len(db.get("alphas", {})))
+        return db
+    logger.info("Alpha DB not found; initializing empty DB path=%s", ALPHA_DB_PATH)
     return {"alphas": {}, "last_update": None, "version": 1}
 
 
 def save_alpha_db(db: dict[str, Any]) -> None:
     db["last_update"] = datetime.now(timezone.utc).isoformat()
     ALPHA_DB_PATH.write_text(json.dumps(db, indent=2, default=str), encoding="utf-8")
+    logger.info("Saved alpha DB path=%s alpha_count=%s", ALPHA_DB_PATH, len(db.get("alphas", {})))
 
 
 def load_lessons() -> dict[str, Any]:
     if LESSONS_PATH.exists():
-        return json.loads(LESSONS_PATH.read_text(encoding="utf-8"))
+        lessons = json.loads(LESSONS_PATH.read_text(encoding="utf-8"))
+        logger.info("Loaded lessons path=%s pattern_count=%s", LESSONS_PATH, len(lessons.get("patterns", {})))
+        return lessons
+    logger.info("Lessons not found; initializing empty lessons path=%s", LESSONS_PATH)
     return {"patterns": {}, "param_insights": {}, "version": 1}
 
 
 def save_lessons(lessons: dict[str, Any]) -> None:
     lessons["last_updated"] = datetime.now(timezone.utc).isoformat()
     LESSONS_PATH.write_text(json.dumps(lessons, indent=2, ensure_ascii=False), encoding="utf-8")
+    logger.info("Saved lessons path=%s pattern_count=%s", LESSONS_PATH, len(lessons.get("patterns", {})))
 
 
 # --------------------------------------------------------------------------- #
@@ -109,12 +141,21 @@ class BrainClient:
 
     def connect(self) -> None:
         username, password = load_credentials()
+        logger.info("Connecting to BRAIN API authentication endpoint")
         self.session = requests.Session()
         self.session.auth = HTTPBasicAuth(username, password)
         self.session.headers.update(HEADERS)
         resp = self.session.post(f"{API_BASE}/authentication")
         if resp.status_code != 201:
+            logger.info(
+                "BRAIN authentication failed status_code=%s body_len=%s body_hash=%s",
+                resp.status_code,
+                len(resp.text or ""),
+                _text_fingerprint(resp.text or ""),
+            )
+            logger.debug("BRAIN authentication failure body=%s", resp.text[:1000])
             raise RuntimeError(f"BRAIN auth failed: {resp.status_code} {resp.text}")
+        logger.info("BRAIN authentication succeeded status_code=%s", resp.status_code)
         print(f"[brain_api] Authenticated", flush=True)
 
     def _ensure_session(self) -> requests.Session:
@@ -126,8 +167,14 @@ class BrainClient:
         if got_429:
             self._429_count += 1
             self._success_streak = 0
+            logger.info(
+                "BRAIN rate limit observed count=%s current_concurrency=%s",
+                self._429_count,
+                self.max_concurrent,
+            )
             if self.max_concurrent > 1:
                 self.max_concurrent -= 1
+                logger.info("Reducing BRAIN concurrency new_concurrency=%s", self.max_concurrent)
                 print(f"[brain_api] 429 received, concurrency -> {self.max_concurrent}", flush=True)
         else:
             self._success_streak += 1
@@ -135,25 +182,39 @@ class BrainClient:
             if self._success_streak >= 10 and self.max_concurrent < 8:
                 self.max_concurrent += 1
                 self._success_streak = 0
+                logger.info("Increasing BRAIN concurrency new_concurrency=%s", self.max_concurrent)
                 print(f"[brain_api] Success streak, concurrency -> {self.max_concurrent}", flush=True)
 
     def get_with_retry(self, url: str, retries: int = 3, **kwargs) -> requests.Response:
         s = self._ensure_session()
         for attempt in range(retries):
             try:
+                logger.debug("GET request attempt=%s/%s url=%s", attempt + 1, retries, url)
                 resp = s.get(url, timeout=(10, 60), **kwargs)
                 if resp.status_code == 429:
                     retry_after = int(resp.headers.get("Retry-After", 5))
+                    logger.info("GET rate limited url=%s retry_after=%ss", url, retry_after)
                     time.sleep(retry_after)
                     self._adjust_concurrency(True)
                     continue
                 if resp.status_code in (401, 403):
+                    logger.info("GET auth expired status_code=%s url=%s; re-authenticating", resp.status_code, url)
                     print("[brain_api] Session expired, re-authenticating...", flush=True)
                     self.connect()
                     s = self.session  # type: ignore
                     continue
+                if resp.status_code >= 400:
+                    logger.info(
+                        "GET returned error status_code=%s url=%s body_len=%s body_hash=%s",
+                        resp.status_code,
+                        url,
+                        len(resp.text or ""),
+                        _text_fingerprint(resp.text or ""),
+                    )
+                    logger.debug("GET error body url=%s body=%s", url, resp.text[:1000])
                 return resp
-            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                logger.info("GET transient exception attempt=%s/%s url=%s error=%s", attempt + 1, retries, url, e)
                 if attempt == retries - 1:
                     raise
                 time.sleep(2 ** attempt)
@@ -163,20 +224,33 @@ class BrainClient:
         s = self._ensure_session()
         for attempt in range(retries):
             try:
+                logger.debug("POST request attempt=%s/%s url=%s", attempt + 1, retries, url)
                 resp = s.post(url, json=json_body, timeout=(30, 300), **kwargs)
                 if resp.status_code == 429:
                     retry_after = int(resp.headers.get("Retry-After", 5))
+                    logger.info("POST rate limited url=%s retry_after=%ss", url, retry_after)
                     time.sleep(retry_after)
                     self._adjust_concurrency(True)
                     continue
                 if resp.status_code in (401, 403):
+                    logger.info("POST auth expired status_code=%s url=%s; re-authenticating", resp.status_code, url)
                     print("[brain_api] Session expired, re-authenticating...", flush=True)
                     self.connect()
                     s = self.session  # type: ignore
                     continue
                 self._adjust_concurrency(False)
+                if resp.status_code >= 400:
+                    logger.info(
+                        "POST returned error status_code=%s url=%s body_len=%s body_hash=%s",
+                        resp.status_code,
+                        url,
+                        len(resp.text or ""),
+                        _text_fingerprint(resp.text or ""),
+                    )
+                    logger.debug("POST error body url=%s body=%s", url, resp.text[:1000])
                 return resp
-            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                logger.info("POST transient exception attempt=%s/%s url=%s error=%s", attempt + 1, retries, url, e)
                 if attempt == retries - 1:
                     raise
                 time.sleep(2 ** attempt)
@@ -196,43 +270,94 @@ class BrainClient:
     def simulate(self, expression: str, settings: dict) -> dict[str, Any]:
         """Submit to /simulations, poll until complete, then fetch alpha metrics from /alphas/{alphaId}."""
         payload = self.build_payload(expression, settings)
+        expr_hash = _expr_fingerprint(expression)
+        logger.info(
+            "Simulation submit start expr_hash=%s expr_len=%s settings_keys=%s",
+            expr_hash,
+            len(expression),
+            sorted(payload["settings"].keys()),
+        )
         resp = self.post_with_retry(f"{API_BASE}/simulations", payload)
         if resp.status_code != 201:
+            logger.info(
+                "Simulation submit failed status_code=%s expr_hash=%s body_len=%s body_hash=%s",
+                resp.status_code,
+                expr_hash,
+                len(resp.text or ""),
+                _text_fingerprint(resp.text or ""),
+            )
+            logger.debug("Simulation submit failure body expr_hash=%s body=%s", expr_hash, resp.text[:1000])
             return {"status": "ERROR", "error": resp.text[:500], "status_code": resp.status_code}
 
         location = resp.headers.get("Location", "")
         sim_id = location.rstrip("/").split("/")[-1]
+        logger.info("Simulation created sim_id=%s expr_hash=%s", sim_id, expr_hash)
 
         sim_result = self._poll_simulation(sim_id)
         if sim_result.get("status") != "COMPLETE":
+            logger.info(
+                "Simulation finished non-complete sim_id=%s status=%s expr_hash=%s status_code=%s error_hash=%s",
+                sim_id,
+                sim_result.get("status"),
+                expr_hash,
+                sim_result.get("status_code"),
+                _text_fingerprint(str(sim_result.get("error", ""))),
+            )
+            logger.debug("Simulation non-complete result sim_id=%s result=%s", sim_id, json.dumps(sim_result, ensure_ascii=False, default=str)[:2000])
             return sim_result
 
         alpha_id = sim_result.get("alpha_id", "")
         if not alpha_id:
+            logger.info("Simulation complete without alpha_id sim_id=%s expr_hash=%s", sim_id, expr_hash)
             return {"status": "ERROR", "error": "No alpha ID returned", "sim_data": sim_result}
 
         # Fetch full alpha data to get sharpe/fitness/turnover from /alphas/{alphaId}
         alpha_data = self.get_alpha(alpha_id)
         if not alpha_data:
+            logger.info("Could not fetch alpha metrics alpha_id=%s sim_id=%s expr_hash=%s", alpha_id, sim_id, expr_hash)
             return {"status": "ERROR", "error": f"Could not fetch alpha {alpha_id}", "alpha_id": alpha_id}
 
+        is_data = alpha_data.get("is", {}) if isinstance(alpha_data, dict) else {}
+        logger.info(
+            "Simulation complete alpha_id=%s sharpe=%s fitness=%s turnover=%s expr_hash=%s",
+            alpha_id,
+            is_data.get("sharpe"),
+            is_data.get("fitness"),
+            is_data.get("turnover"),
+            expr_hash,
+        )
         return {"status": "COMPLETE", "alpha_id": alpha_id, "sim_data": alpha_data}
 
     def _poll_simulation(self, sim_id: str, timeout: int = 600) -> dict[str, Any]:
         start = time.time()
+        logger.info("Polling simulation start sim_id=%s timeout=%ss", sim_id, timeout)
+        last_status = None
         while time.time() - start < timeout:
             resp = self.get_with_retry(f"{API_BASE}/simulations/{sim_id}")
             if resp.status_code != 200:
+                logger.info("Polling simulation non-200 sim_id=%s status_code=%s", sim_id, resp.status_code)
                 time.sleep(8)
                 continue
             data = resp.json()
             status = data.get("status", "UNKNOWN")
+            if status != last_status:
+                logger.info("Polling simulation status changed sim_id=%s status=%s", sim_id, status)
+                last_status = status
             if status == "COMPLETE":
                 alpha_id = data.get("alpha", "")
+                logger.info("Polling simulation complete sim_id=%s alpha_id=%s", sim_id, alpha_id)
                 return {"status": "COMPLETE", "alpha_id": alpha_id, "sim_data": data}
             if status in ("ERROR", "FAILED"):
+                logger.info(
+                    "Polling simulation failed sim_id=%s status=%s data_keys=%s",
+                    sim_id,
+                    status,
+                    sorted(data.keys()) if isinstance(data, dict) else [],
+                )
+                logger.debug("Polling simulation failed data sim_id=%s data=%s", sim_id, json.dumps(data, ensure_ascii=False, default=str)[:2000])
                 return {"status": "ERROR", "sim_data": data}
             time.sleep(5)
+        logger.info("Polling simulation timeout sim_id=%s elapsed=%.1fs", sim_id, time.time() - start)
         return {"status": "TIMEOUT", "simulation_id": sim_id}
 
     def _is_retryable_sim_error(self, sim_result: dict[str, Any]) -> bool:
@@ -271,22 +396,49 @@ class BrainClient:
 
         concurrency = max_concurrent or self.max_concurrent
         results: list[dict[str, Any]] = []
+        logger.info(
+            "Batch simulate start candidate_count=%s concurrency=%s max_retries=%s",
+            len(candidates),
+            concurrency,
+            max_retries,
+        )
 
         def _run_one(idx: int, cand: dict) -> dict[str, Any]:
             expr = cand["expression"]
+            expr_hash = _expr_fingerprint(expr)
             settings = cand.get("settings", {})
             for attempt in range(max_retries + 1):
                 try:
                     sim_result = self.simulate(expr, settings)
                 except Exception as e:
+                    logger.info("Simulation raised exception batch_idx=%s attempt=%s expr_hash=%s error=%s", idx, attempt + 1, expr_hash, e)
                     sim_result = {"status": "ERROR", "error": str(e)}
 
                 sim_result["attempts"] = attempt + 1
                 retryable = self._is_retryable_sim_error(sim_result)
                 if not retryable or attempt >= max_retries:
+                    logger.info(
+                        "Simulation candidate finished batch_idx=%s status=%s attempts=%s retryable=%s expr_hash=%s",
+                        idx,
+                        sim_result.get("status"),
+                        sim_result.get("attempts"),
+                        retryable,
+                        expr_hash,
+                    )
                     return {**cand, "sim_result": sim_result, "batch_idx": idx}
 
                 sleep_s = min(30, 5 * (attempt + 1))
+                logger.info(
+                    "Simulation candidate retry batch_idx=%s attempt=%s/%s sleep=%ss status=%s status_code=%s error=%s expr_hash=%s",
+                    idx,
+                    attempt + 1,
+                    max_retries,
+                    sleep_s,
+                    sim_result.get("status"),
+                    sim_result.get("status_code"),
+                    sim_result.get("error"),
+                    expr_hash,
+                )
                 print(
                     f"  [retry] transient simulation error; retrying {attempt + 1}/{max_retries} "
                     f"after {sleep_s}s — {expr[:50]}",
@@ -311,27 +463,67 @@ class BrainClient:
 
         # Sort by original order
         results.sort(key=lambda r: r.get("batch_idx", 0))
+        status_counts: dict[str, int] = {}
+        for result in results:
+            status = result.get("sim_result", {}).get("status", "?")
+            status_counts[status] = status_counts.get(status, 0) + 1
+        logger.info("Batch simulate complete candidate_count=%s status_counts=%s", len(candidates), status_counts)
         return results
 
     # ----------------------------------------------------------------- #
     # Metrics & PnL
     # ----------------------------------------------------------------- #
     def get_alpha(self, alpha_id: str) -> dict:
+        logger.info("Fetching alpha details alpha_id=%s", alpha_id)
         resp = self.get_with_retry(f"{API_BASE}/alphas/{alpha_id}")
         if resp.status_code == 200:
-            return resp.json()
+            data = resp.json()
+            is_data = data.get("is", {}) if isinstance(data, dict) else {}
+            logger.info(
+                "Fetched alpha details alpha_id=%s status=%s sharpe=%s fitness=%s turnover=%s",
+                alpha_id,
+                data.get("status") if isinstance(data, dict) else None,
+                is_data.get("sharpe"),
+                is_data.get("fitness"),
+                is_data.get("turnover"),
+            )
+            return data
+        logger.info(
+            "Fetch alpha details failed alpha_id=%s status_code=%s body_len=%s body_hash=%s",
+            alpha_id,
+            resp.status_code,
+            len(resp.text or ""),
+            _text_fingerprint(resp.text or ""),
+        )
+        logger.debug("Fetch alpha details failed body alpha_id=%s body=%s", alpha_id, resp.text[:1000])
         return {}
 
     def fetch_pnl(self, alpha_id: str) -> list[float]:
+        logger.info("Fetching alpha PnL alpha_id=%s", alpha_id)
         try:
             resp = self.get_with_retry(f"{API_BASE}/alphas/{alpha_id}/recordsets/pnl")
-        except Exception:
+        except Exception as e:
+            logger.info("Fetch alpha PnL exception alpha_id=%s error=%s", alpha_id, e)
             return []
         if resp.status_code != 200 or not resp.text.strip():
+            logger.info(
+                "Fetch alpha PnL empty alpha_id=%s status_code=%s text_chars=%s",
+                alpha_id,
+                resp.status_code,
+                len(resp.text or ""),
+            )
             return []
         try:
             data = resp.json()
-        except Exception:
+        except Exception as e:
+            logger.info(
+                "Fetch alpha PnL JSON parse failed alpha_id=%s error=%s body_len=%s body_hash=%s",
+                alpha_id,
+                e,
+                len(resp.text or ""),
+                _text_fingerprint(resp.text or ""),
+            )
+            logger.debug("Fetch alpha PnL JSON parse failed body alpha_id=%s body=%s", alpha_id, resp.text[:1000])
             return []
 
         schema = data.get("schema", {})
@@ -357,24 +549,45 @@ class BrainClient:
                 out.append(float(rec[pnl_idx]))
             except Exception:
                 continue
+        logger.info("Fetched alpha PnL alpha_id=%s raw_records=%s parsed_records=%s", alpha_id, len(records), len(out))
         return out
 
     def submit_alpha(self, alpha_id: str) -> dict[str, Any]:
         """Submit alpha and poll for result."""
+        logger.info("Submit alpha start alpha_id=%s", alpha_id)
         resp = self.post_with_retry(f"{API_BASE}/alphas/{alpha_id}/submit", json_body={})
         if resp.status_code not in (200, 201):
+            logger.info(
+                "Submit alpha failed alpha_id=%s status_code=%s body_len=%s body_hash=%s",
+                alpha_id,
+                resp.status_code,
+                len(resp.text or ""),
+                _text_fingerprint(resp.text or ""),
+            )
+            logger.debug("Submit alpha failed body alpha_id=%s body=%s", alpha_id, resp.text[:1000])
             return {"submitted": False, "status_code": resp.status_code, "text": resp.text[:300]}
 
-        for _ in range(30):
+        logger.info("Submit alpha accepted alpha_id=%s status_code=%s; polling status", alpha_id, resp.status_code)
+        for poll_idx in range(30):
             time.sleep(10)
             alpha = self.get_alpha(alpha_id)
             status = alpha.get("status")
-            if status == "ACTIVE":
-                return {"submitted": True, "status": "ACTIVE", "alpha": alpha}
             checks = alpha.get("is", {}).get("checks", [])
-            sc = next((c for c in checks if c.get("name") == "SELF_CORRELATION"), {})
-            if sc.get("result") == "FAIL":
+            self_corr = next((c for c in checks if c.get("name") == "SELF_CORRELATION"), {})
+            logger.info(
+                "Submit alpha poll alpha_id=%s poll=%s status=%s self_corr_result=%s",
+                alpha_id,
+                poll_idx + 1,
+                status,
+                self_corr.get("result"),
+            )
+            if status == "ACTIVE":
+                logger.info("Submit alpha active alpha_id=%s poll=%s", alpha_id, poll_idx + 1)
+                return {"submitted": True, "status": "ACTIVE", "alpha": alpha}
+            if self_corr.get("result") == "FAIL":
+                logger.info("Submit alpha self-correlation failed alpha_id=%s status=%s", alpha_id, status)
                 return {"submitted": True, "status": status, "self_correlation": "FAIL", "alpha": alpha}
+        logger.info("Submit alpha still pending after polling alpha_id=%s polls=30", alpha_id)
         return {"submitted": True, "status": "PENDING"}
 
 
