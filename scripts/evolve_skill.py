@@ -1,168 +1,27 @@
-"""WQ Alpha Research Skill self-evolution helper.
+#!/usr/bin/env python3
+"""evolve_skill.py — Experience synchronizer.
 
-Self-contained: only needs `requests`, `numpy`, and credentials supplied via
-environment variables or a local untracked `credential.txt` file.
+Syncs alpha_db.json results into lessons.json and prints summary reports.
+This is the bridge between raw simulation results and the lessons feedback loop.
 
 Usage:
-    cd <skill-dir>
-    pyenv exec python scripts/evolve_skill.py
-    pyenv exec python scripts/evolve_skill.py --apply
-
-Behavior:
-    - First run (empty alpha_db.json): bulk snapshot.
-    - Subsequent runs: incremental entries for new/changed alphas.
-    - Without --apply: prints proposed markdown snippet, modifies nothing.
-    - With --apply: appends snippet to SKILL.md Section 12 and saves alpha_db.json.
+    python3 evolve_skill.py --sync          # Sync alpha_db into lessons
+    python3 evolve_skill.py --report        # Print lessons report
+    python3 evolve_skill.py --sync --apply  # Sync and save
+    python3 evolve_skill.py --sync --connect  # Sync with live API connection
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
-import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-import requests
-from requests.auth import HTTPBasicAuth
-
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
 ALPHA_DB_PATH = SKILL_DIR / "alpha_db.json"
-SKILL_PATH = SKILL_DIR / "SKILL.md"
-CREDENTIAL_PATH = SKILL_DIR / "credential.txt"
-
-API_BASE = "https://api.worldquantbrain.com"
-
-HEADERS = {
-    "Accept": "application/json;version=2.0",
-    "Content-Type": "application/json",
-}
-
-
-def load_credentials() -> tuple[str, str]:
-    """Load BRAIN credentials without relying on committed secrets."""
-    env_user = os.getenv("WQ_BRAIN_USERNAME")
-    env_password = os.getenv("WQ_BRAIN_PASSWORD")
-    if env_user and env_password:
-        return env_user, env_password
-
-    candidates = [
-        CREDENTIAL_PATH,
-        Path.cwd() / "credential.txt",
-    ]
-    for p in candidates:
-        if p.exists():
-            username, password = json.loads(p.read_text(encoding="utf-8"))
-            return str(username), str(password)
-    raise FileNotFoundError(
-        "BRAIN credentials not found. Set WQ_BRAIN_USERNAME/WQ_BRAIN_PASSWORD "
-        'or create an untracked credential.txt with ["your_username", "your_password"].'
-    )
-
-
-def create_session() -> requests.Session:
-    username, password = load_credentials()
-    session = requests.Session()
-    session.auth = HTTPBasicAuth(username, password)
-    session.headers.update(HEADERS)
-
-    resp = session.post(f"{API_BASE}/authentication")
-    if resp.status_code != 201:
-        raise RuntimeError(f"BRAIN auth failed: {resp.status_code} {resp.text}")
-    return session
-
-
-def get_with_retry(session: requests.Session, url: str, retries: int = 3, **kwargs) -> requests.Response:
-    for attempt in range(retries):
-        try:
-            resp = session.get(url, timeout=(10, 60), **kwargs)
-            if resp.status_code == 429:
-                retry_after = int(resp.headers.get("Retry-After", 5))
-                time.sleep(retry_after)
-                continue
-            return resp
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-            if attempt == retries - 1:
-                raise
-            time.sleep(2 ** attempt)
-    raise RuntimeError(f"GET {url} failed after {retries} retries")
-
-
-def fetch_pnl(session: requests.Session, alpha_id: str) -> list[float]:
-    """Fetch cumulative PnL recordset; tolerate list/dict schema.properties."""
-    try:
-        resp = get_with_retry(
-            session,
-            f"{API_BASE}/alphas/{alpha_id}/recordsets/pnl",
-        )
-    except Exception:
-        return []
-    if resp.status_code != 200 or not resp.text.strip():
-        return []
-    try:
-        data = resp.json()
-    except Exception:
-        return []
-
-    schema = data.get("schema", {})
-    props = schema.get("properties", [])
-    if isinstance(props, list):
-        date_idx = next((i for i, p in enumerate(props) if p.get("name", "").lower() == "date"), 0)
-        pnl_idx = next(
-            (i for i, p in enumerate(props) if p.get("name", "").lower() in ("pnl", "cum_pnl", "returns", "ret")),
-            1,
-        )
-    else:
-        date_idx = next((v["index"] for k, v in props.items() if k.lower() == "date"), 0)
-        pnl_idx = next(
-            (v["index"] for k, v in props.items() if k.lower() in ("pnl", "cum_pnl", "returns", "ret")),
-            1,
-        )
-
-    records = sorted(data.get("records", []), key=lambda r: r[date_idx])
-    out: list[float] = []
-    for row in records:
-        rec = row[0] if isinstance(row, list) and len(row) == 1 and isinstance(row[0], list) else row
-        try:
-            out.append(float(rec[pnl_idx]))
-        except Exception:
-            continue
-    return out
-
-
-def fetch_user_alphas(session: requests.Session, limit: int = 100) -> list[dict]:
-    """Fetch all user alphas with pagination."""
-    all_alphas: list[dict] = []
-    offset = 0
-    while True:
-        resp = get_with_retry(
-            session,
-            f"{API_BASE}/users/self/alphas",
-            params={"limit": limit, "offset": offset},
-        )
-        if resp.status_code != 200:
-            raise RuntimeError(f"Failed to fetch alphas: {resp.status_code} {resp.text}")
-        data = resp.json()
-        batch = data.get("results", data.get("alphas", []))
-        if not batch:
-            break
-        all_alphas.extend(batch)
-        if len(batch) < limit:
-            break
-        offset += limit
-        time.sleep(0.2)
-    return all_alphas
-
-
-def daily_returns(cum_pnl: list[float]) -> list[float]:
-    return [cum_pnl[i + 1] - cum_pnl[i] for i in range(len(cum_pnl) - 1)]
+LESSONS_PATH = SKILL_DIR / "lessons.json"
 
 
 def load_alpha_db() -> dict[str, Any]:
@@ -171,343 +30,245 @@ def load_alpha_db() -> dict[str, Any]:
     return {"alphas": {}, "last_update": None, "version": 1}
 
 
-def save_alpha_db(db: dict[str, Any]) -> None:
-    ALPHA_DB_PATH.write_text(json.dumps(db, indent=2, default=str), encoding="utf-8")
+def load_lessons() -> dict[str, Any]:
+    if LESSONS_PATH.exists():
+        return json.loads(LESSONS_PATH.read_text(encoding="utf-8"))
+    return {"patterns": {}, "param_insights": {}, "version": 1}
 
 
-def compute_alpha_fingerprint(alpha: dict) -> dict[str, Any]:
-    """Stable snapshot of an alpha that we can compare across runs."""
-    is_ = alpha.get("is", {}) if isinstance(alpha.get("is"), dict) else {}
-    expr_obj = alpha.get("regular", alpha.get("expression", {}))
-    expr = expr_obj.get("code") if isinstance(expr_obj, dict) else str(expr_obj)
-    settings = alpha.get("settings", {})
-    return {
-        "status": alpha.get("status"),
-        "expression": expr,
-        "settings": settings,
-        "sharpe": is_.get("sharpe"),
-        "fitness": is_.get("fitness"),
-        "returns": is_.get("returns"),
-        "turnover": is_.get("turnover"),
-        "drawdown": is_.get("drawdown"),
-        "margin": is_.get("margin"),
-        "long_count": is_.get("longCount"),
-        "short_count": is_.get("shortCount"),
-    }
+def save_lessons(lessons: dict[str, Any]) -> None:
+    lessons["last_updated"] = datetime.now(timezone.utc).isoformat()
+    LESSONS_PATH.write_text(json.dumps(lessons, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def classify_alpha(expr: str) -> str:
-    """Rough family classification based on expression tokens."""
-    expr_lower = expr.lower()
-    tokens = []
-    if any(f in expr_lower for f in ["operating_income/equity", "oi/equity", "operating_income/sales"]):
-        tokens.append("profitability")
-    if any(f in expr_lower for f in ["est_eps", "est_fcf", "est_revenue", "est_ebitda", "est_ptp"]):
-        tokens.append("analyst")
-    if any(f in expr_lower for f in ["free_cash_flow", "cashflow_op", "cash_flow"]):
-        tokens.append("cashflow")
-    if any(f in expr_lower for f in ["close/open", "open/close", "vwap", "returns", "volume", "high + low"]):
-        tokens.append("technical")
-    if any(f in expr_lower for f in ["scl12_buzz", "scl12_sentiment", "sentiment"]):
-        tokens.append("sentiment")
-    if any(f in expr_lower for f in ["equity/assets", "liabilities/assets", "sales/assets"]):
-        tokens.append("quality/leverage")
-    return "+".join(tokens) if tokens else "other"
+def sync_alpha_db_to_lessons(
+    lessons: dict[str, Any],
+    db: dict[str, Any],
+    client=None,
+) -> int:
+    """Sync alpha_db entries into lessons.json.
 
+    Only processes entries not yet synced (tracked via _synced_alpha_ids).
+    Returns number of newly synced entries.
+    """
+    synced_ids: list[str] = lessons.setdefault("_synced_alpha_ids", [])
+    synced_set = set(synced_ids)
+    count = 0
 
-def correlation_with_existing(
-    new_pnl: list[float], db: dict[str, Any], min_records: int = 50
-) -> list[dict[str, Any]]:
-    """Compute daily-return correlation of a new alpha against all ACTIVE alphas in DB."""
-    if len(new_pnl) < min_records + 1:
-        return []
-    new_ret = np.array(daily_returns(new_pnl))
-    results: list[dict[str, Any]] = []
-    for old_id, old in db.get("alphas", {}).items():
-        if old.get("status") != "ACTIVE" or not old.get("pnl"):
+    for alpha_id, alpha in db.get("alphas", {}).items():
+        if alpha_id in synced_set:
             continue
-        old_ret = np.array(daily_returns(old["pnl"]))
-        if len(new_ret) != len(old_ret):
+
+        expr = alpha.get("expression", alpha.get("regular", ""))
+        if not expr:
             continue
-        corr = float(np.corrcoef(new_ret, old_ret)[0, 1])
-        results.append({"alpha_id": old_id, "corr": corr, "sharpe": old.get("sharpe"), "fitness": old.get("fitness")})
-    results.sort(key=lambda x: abs(x["corr"]), reverse=True)
-    return results
+
+        # Classify alpha
+        template_id = alpha.get("template_id", "imported")
+        sharpe = alpha.get("sharpe")
+        fitness = alpha.get("fitness")
+        turnover = alpha.get("turnover")
+        status = alpha.get("status", "UNKNOWN")
+
+        # If client provided and we need PnL for correlation
+        pnl = alpha.get("pnl")
+        if client and not pnl and status == "ACTIVE":
+            try:
+                pnl = client.fetch_pnl(alpha_id)
+                alpha["pnl"] = pnl
+            except Exception:
+                pass
+
+        # Ensure pattern exists
+        patterns = lessons.setdefault("patterns", {})
+        if template_id not in patterns:
+            patterns[template_id] = {
+                "description": f"Template: {template_id}",
+                "tested": 0, "passed": 0, "pass_rate": 0.0,
+                "avg_sharpe": 0.0, "avg_fitness": 0.0,
+                "best": None, "failure_modes": {}, "action": "expand",
+                "notes": "",
+            }
+
+        p = patterns[template_id]
+        p["tested"] += 1
+
+        # Determine pass/fail (ACTIVE = passed)
+        passed = status == "ACTIVE"
+        if passed:
+            p["passed"] += 1
+        else:
+            if sharpe is None:
+                mode = "SIM_ERROR"
+            elif sharpe < 1.0:
+                mode = "LOW_SHARPE"
+            elif fitness is not None and fitness < 1.0:
+                mode = "LOW_FITNESS"
+            elif turnover is not None and turnover > 0.7:
+                mode = "HIGH_TURNOVER"
+            else:
+                mode = "OTHER"
+            fm = p.setdefault("failure_modes", {})
+            fm[mode] = fm.get(mode, 0) + 1
+
+        # Update averages
+        if sharpe is not None:
+            old_count = p["tested"] - 1
+            if old_count > 0:
+                p["avg_sharpe"] = (p["avg_sharpe"] * old_count + sharpe) / p["tested"]
+            else:
+                p["avg_sharpe"] = sharpe
+
+        if fitness is not None:
+            old_count = p["tested"] - 1
+            if old_count > 0:
+                p["avg_fitness"] = (p["avg_fitness"] * old_count + fitness) / p["tested"]
+            else:
+                p["avg_fitness"] = fitness
+
+        p["pass_rate"] = p["passed"] / p["tested"] if p["tested"] > 0 else 0.0
+
+        # Update best
+        if sharpe is not None:
+            best = p.get("best")
+            if best is None or sharpe > best.get("sharpe", 0):
+                p["best"] = {
+                    "alpha_id": alpha_id,
+                    "sharpe": sharpe,
+                    "expr": expr,
+                }
+
+        # Auto-update action
+        if p["tested"] >= 5:
+            if p["pass_rate"] == 0.0:
+                p["action"] = "skip"
+            elif p["pass_rate"] < 0.2:
+                p["action"] = "deprioritize"
+            else:
+                p["action"] = "expand"
+
+        # Update param insights
+        settings = alpha.get("settings", {})
+        params = {
+            "decay": str(settings.get("decay", 0)),
+            "neutralization": str(settings.get("neutralization", "INDUSTRY")),
+        }
+        param_insights = lessons.setdefault("param_insights", {})
+        for param_name, param_val in params.items():
+            pi = param_insights.setdefault(param_name, {})
+            entry = pi.setdefault(param_val, {
+                "avg_sharpe": 0.0, "verdict": "neutral", "notes": "", "count": 0
+            })
+            entry["count"] += 1
+            if sharpe is not None:
+                old_count = entry["count"] - 1
+                if old_count > 0:
+                    entry["avg_sharpe"] = (entry["avg_sharpe"] * old_count + sharpe) / entry["count"]
+                else:
+                    entry["avg_sharpe"] = sharpe
+                if entry["count"] >= 3:
+                    if entry["avg_sharpe"] >= 1.5:
+                        entry["verdict"] = "prefer"
+                    elif entry["avg_sharpe"] < 0.8:
+                        entry["verdict"] = "deprioritize"
+
+        synced_ids.append(alpha_id)
+        count += 1
+
+    lessons["last_updated"] = datetime.now(timezone.utc).isoformat()
+    return count
 
 
-def generate_lesson(fp: dict[str, Any], top_corr: list[dict[str, Any]]) -> str:
-    """Generate a one-line lesson from this alpha."""
-    family = classify_alpha(fp["expression"])
+def build_report(lessons: dict[str, Any], db: dict[str, Any]) -> str:
+    """Build a human-readable report from lessons and alpha_db."""
+    lines = []
+    lines.append("=" * 70)
+    lines.append("Alpha Mining Lessons Report")
+    lines.append("=" * 70)
 
-    if fp["fitness"] is None:
-        metric_note = "模拟失败或数据缺失"
-    elif fp["fitness"] >= 1.5 and fp["turnover"] is not None and fp["turnover"] <= 0.15:
-        metric_note = "高 Fitness 低换手，优秀候选"
-    elif fp["fitness"] >= 1.1 and fp["turnover"] is not None and fp["turnover"] <= 0.20:
-        metric_note = "满足基础提交门槛"
-    elif fp["turnover"] is not None and fp["turnover"] > 0.35:
-        metric_note = "换手偏高，需增大 decay 或混合稳定信号"
+    patterns = lessons.get("patterns", {})
+    if not patterns:
+        lines.append("\nNo patterns recorded yet.")
     else:
-        metric_note = "指标一般，需继续优化"
+        lines.append(f"\nPatterns ({len(patterns)}):\n")
+        lines.append(f"{'Template':<35} {'Tested':>7} {'Passed':>7} {'Rate':>6} {'Avg Sharpe':>11} {'Action':>12}")
+        lines.append("-" * 90)
+        for tid, p in sorted(patterns.items()):
+            tested = p.get("tested", 0)
+            passed = p.get("passed", 0)
+            rate = p.get("pass_rate", 0.0)
+            avg_sharpe = p.get("avg_sharpe", 0.0)
+            action = p.get("action", "expand")
+            best_sharpe = (p.get("best") or {}).get("sharpe", "N/A")
+            lines.append(f"{tid:<35} {tested:>7} {passed:>7} {rate:>5.0%} {avg_sharpe:>11.2f} {action:>12}")
 
-    if not top_corr:
-        corr_note = "暂无 ACTIVE alpha 可比相关"
-    elif abs(top_corr[0]["corr"]) >= 0.7:
-        corr_note = f"与 {top_corr[0]['alpha_id']} 高度相关 ({top_corr[0]['corr']:.2f})，需换信号簇"
-    elif abs(top_corr[0]["corr"]) >= 0.5:
-        corr_note = f"与 {top_corr[0]['alpha_id']} 中等相关 ({top_corr[0]['corr']:.2f})，谨慎提交"
-    else:
-        corr_note = f"与现有 ACTIVE alpha 低相关 ({top_corr[0]['corr']:.2f})，分散价值较高"
+            # Failure modes
+            fm = p.get("failure_modes", {})
+            if fm:
+                fm_str = ", ".join(f"{k}:{v}" for k, v in sorted(fm.items(), key=lambda x: -x[1]))
+                lines.append(f"  └─ Failures: {fm_str}")
+            if best_sharpe != "N/A":
+                lines.append(f"  └─ Best: Sharpe={best_sharpe}")
 
-    return f"{metric_note}；{corr_note}"
+    # Param insights
+    param_insights = lessons.get("param_insights", {})
+    if param_insights:
+        lines.append(f"\n\nParam Insights ({len(param_insights)} params):\n")
+        for pname, vals in sorted(param_insights.items()):
+            lines.append(f"  {pname}:")
+            for val, info in sorted(vals.items(), key=lambda x: -x[1].get("count", 0)):
+                count = info.get("count", 0)
+                avg = info.get("avg_sharpe", 0.0)
+                verdict = info.get("verdict", "neutral")
+                lines.append(f"    {val:<20} count={count:>3}  avg_sharpe={avg:.2f}  → {verdict}")
 
-
-def truncate_expr(expr: str, max_len: int = 120) -> str:
-    expr = expr or ""
-    lines = expr.strip().splitlines()
-    first = lines[0].strip() if lines else ""
-    if len(first) > max_len:
-        first = first[: max_len - 3] + "..."
-    return first
-
-
-def build_bulk_summary(alphas: list[dict], active_correlations: dict[str, list[dict[str, Any]]]) -> str:
-    """Build a compact summary for the first (bulk) run."""
-    from collections import Counter
-
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    # DB stats
+    alphas = db.get("alphas", {})
+    active = sum(1 for a in alphas.values() if a.get("status") == "ACTIVE")
     total = len(alphas)
-    active = [a for a in alphas if a.get("status") == "ACTIVE"]
-    unsubmitted = [a for a in alphas if a.get("status") != "ACTIVE"]
-    families = Counter(classify_alpha(a.get("regular", {}).get("code", "")) for a in alphas)
+    lines.append(f"\n\nAlpha DB: {total} total, {active} ACTIVE")
 
-    top_active = sorted(active, key=lambda a: (a.get("is", {}).get("fitness") or 0), reverse=True)[:5]
-    failures = [a for a in alphas if a.get("is", {}).get("fitness") is not None and a.get("is", {}).get("fitness") < 0.5]
-    high_to = [a for a in alphas if a.get("is", {}).get("turnover") is not None and a.get("is", {}).get("turnover") > 0.50]
-
-    lines = [
-        f"\n### {now} — 批量初始化快照\n",
-        f"- 总 alpha：{total} | ACTIVE：{len(active)} | 非 ACTIVE：{len(unsubmitted)}",
-        f"- 信号簇分布：{dict(families.most_common(8))}",
-        "",
-        "**ACTIVE 高 Fitness Top 5**：",
-    ]
-    for a in top_active:
-        is_ = a.get("is", {})
-        expr = truncate_expr(a.get("regular", {}).get("code", ""))
-        lines.append(
-            f"- `{a['id']}` ({classify_alpha(a.get('regular', {}).get('code', ''))}): "
-            f"Sharpe={is_.get('sharpe'):.2f}, Fitness={is_.get('fitness'):.2f}, TO={is_.get('turnover'):.3f} — `{expr}`"
-        )
-
-    if active_correlations:
-        high_corr_pairs = []
-        ids = sorted(active_correlations.keys())
-        for i, a in enumerate(ids):
-            for b in ids[i + 1 :]:
-                corr = next((c["corr"] for c in active_correlations[a] if c["alpha_id"] == b), None)
-                if corr is None:
-                    corr = next((c["corr"] for c in active_correlations[b] if c["alpha_id"] == a), 0.0)
-                if abs(corr) >= 0.7:
-                    high_corr_pairs.append((a, b, corr))
-        if high_corr_pairs:
-            lines.extend(["", "**ACTIVE 中日收益高相关对（≥ 0.7）**："])
-            for a, b, c in high_corr_pairs[:10]:
-                lines.append(f"- `{a}` vs `{b}`: {c:.3f}")
-        else:
-            lines.extend(["", "**ACTIVE 中日收益高相关对**：无 ≥ 0.7 的对（或 PnL 不足）"])
-
-    if failures:
-        lines.extend(["", f"**明显失效信号（Fitness < 0.5，共 {len(failures)} 个）**："])
-        families_fail = Counter(classify_alpha(a.get("regular", {}).get("code", "")) for a in failures)
-        lines.append(f"- 簇分布：{dict(families_fail.most_common(5))}")
-
-    if high_to:
-        lines.extend(["", f"**高换手（TO > 50%，共 {len(high_to)} 个）**："])
-        families_to = Counter(classify_alpha(a.get("regular", {}).get("code", "")) for a in high_to)
-        lines.append(f"- 簇分布：{dict(families_to.most_common(5))}")
-
-    lines.append("\n---\n")
+    lines.append("\n" + "=" * 70)
     return "\n".join(lines)
 
 
-def build_incremental_report(entries: list[dict[str, Any]]) -> str:
-    """Build per-alpha markdown for incremental updates."""
-    if not entries:
-        return ""
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    lines = [f"\n### {now}\n"]
-    for e in entries:
-        if e.get("event") == "status_or_metric_changed":
-            lines.append(
-                f"- **{e['alpha_id']}** 状态变化：{e['old_status']} → {e['new_status']}；"
-                f"Sharpe={e['sharpe']}, Fitness={e['fitness']}, TO={e['turnover']}。{e['lesson']}"
-            )
-        else:
-            lines.append(
-                f"- **{e['alpha_id']}** ({e['status']}, {e['family']}): "
-                f"Sharpe={e['sharpe']}, Fitness={e['fitness']}, TO={e['turnover']}, DD={e['drawdown']}。"
-                f"{e['lesson']}"
-            )
-            if e["top_corr"]:
-                corr_strs = [f"{c['alpha_id']}({c['corr']:+.2f})" for c in e["top_corr"]]
-                lines.append(f"  - 相关：{', '.join(corr_strs)}")
-            expr = truncate_expr(e["expression"])
-            if expr:
-                lines.append(f"  - 表达式：`{expr}`")
-    lines.append("\n---\n")
-    return "\n".join(lines)
-
-
-def append_to_skill(snippet: str) -> None:
-    """Append snippet to the end of SKILL.md (Section 12 is the last section)."""
-    if not SKILL_PATH.exists():
-        raise FileNotFoundError(f"SKILL.md not found at {SKILL_PATH}")
-    content = SKILL_PATH.read_text(encoding="utf-8")
-    marker = "## 12. 实证记录（自动更新）"
-    if marker not in content:
-        content += f"\n\n{marker}\n\n{snippet}"
-    else:
-        if not content.endswith("\n"):
-            content += "\n"
-        content += snippet + "\n"
-    SKILL_PATH.write_text(content, encoding="utf-8")
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Evolve WQ Alpha Research SKILL with new empirical data.")
-    parser.add_argument("--apply", action="store_true", help="Automatically append the generated snippet to SKILL.md")
+def main():
+    parser = argparse.ArgumentParser(description="Sync alpha_db into lessons and print reports")
+    parser.add_argument("--sync", action="store_true", help="Sync alpha_db entries into lessons")
+    parser.add_argument("--report", action="store_true", help="Print lessons report")
+    parser.add_argument("--apply", action="store_true", help="Save lessons to disk (use with --sync)")
+    parser.add_argument("--connect", action="store_true", help="Connect to BRAIN API for live data")
     args = parser.parse_args()
 
-    session = create_session()
-    print("auth ok", flush=True)
-
     db = load_alpha_db()
-    known_ids = set(db.get("alphas", {}).keys())
-    is_first_run = len(known_ids) == 0
+    lessons = load_lessons()
 
-    all_alphas = fetch_user_alphas(session)
-    print(f"fetched {len(all_alphas)} alphas, known={len(known_ids)}", flush=True)
+    client = None
+    if args.connect:
+        try:
+            from brain_api import BrainClient
+            client = BrainClient()
+            client.connect()
+        except Exception as e:
+            print(f"Warning: Could not connect to BRAIN API: {e}", flush=True)
 
-    new_alphas: list[dict] = []
-    changed_alphas: list[tuple[dict, dict]] = []
-
-    for alpha in all_alphas:
-        aid = alpha.get("id")
-        if not aid:
-            continue
-        fp = compute_alpha_fingerprint(alpha)
-
-        if aid not in known_ids:
-            new_alphas.append(alpha)
-        else:
-            old = db["alphas"][aid]
-            if old.get("status") != fp["status"] or old.get("sharpe") != fp["sharpe"]:
-                changed_alphas.append((old, {**fp, "alpha_id": aid}))
-
-    # ------------------------------------------------------------------
-    # Preview mode: compute snippet without mutating DB
-    # ------------------------------------------------------------------
-    if is_first_run:
-        print("first run: building bulk snapshot...", flush=True)
-        active_alphas = [a for a in all_alphas if a.get("status") == "ACTIVE"]
-        active_correlations: dict[str, list[dict[str, Any]]] = {}
-
-        preview_db = {"alphas": {}}
-        for idx, alpha in enumerate(all_alphas):
-            aid = alpha.get("id")
-            fp = compute_alpha_fingerprint(alpha)
-            pnl = fetch_pnl(session, aid)
-            preview_db["alphas"][aid] = {**fp, "pnl": pnl}
-            if idx % 10 == 0:
-                print(f"  fetched {idx + 1}/{len(all_alphas)} PnLs", flush=True)
-            time.sleep(0.3)
-
-        active_ids = [a.get("id") for a in active_alphas if a.get("id")]
-        for aid in active_ids:
-            pnl = preview_db["alphas"][aid].get("pnl", [])
-            active_correlations[aid] = correlation_with_existing(pnl, preview_db)
-
-        snippet = build_bulk_summary(all_alphas, active_correlations)
-
+    if args.sync:
+        count = sync_alpha_db_to_lessons(lessons, db, client)
+        print(f"Synced {count} new entries into lessons", flush=True)
         if args.apply:
-            db["alphas"] = preview_db["alphas"]
-    else:
-        # ------------------------------------------------------------------
-        # Incremental run: per-alpha entries for new/changed only
-        # ------------------------------------------------------------------
-        print(f"incremental: {len(new_alphas)} new, {len(changed_alphas)} changed", flush=True)
-        entries: list[dict[str, Any]] = []
+            save_lessons(lessons)
+            print(f"Lessons saved to {LESSONS_PATH}", flush=True)
+        else:
+            print("(dry run — use --apply to save)", flush=True)
 
-        for alpha in new_alphas:
-            aid = alpha.get("id")
-            fp = compute_alpha_fingerprint(alpha)
-            pnl = fetch_pnl(session, aid)
+    if args.report or not args.sync:
+        report = build_report(lessons, db)
+        print(report)
 
-            top_corr = correlation_with_existing(pnl, db)
-            lesson = generate_lesson(fp, top_corr)
-            entries.append(
-                {
-                    "alpha_id": aid,
-                    "status": fp["status"],
-                    "family": classify_alpha(fp["expression"]),
-                    "sharpe": fp["sharpe"],
-                    "fitness": fp["fitness"],
-                    "turnover": fp["turnover"],
-                    "drawdown": fp["drawdown"],
-                    "expression": fp["expression"],
-                    "top_corr": top_corr[:3],
-                    "lesson": lesson,
-                }
-            )
-            if args.apply:
-                db["alphas"][aid] = {**fp, "pnl": pnl}
-            print(f"  new: {aid} | sharpe={fp['sharpe']} | fitness={fp['fitness']} | to={fp['turnover']}")
-            time.sleep(0.3)
-
-        for old, new in changed_alphas:
-            aid = new["alpha_id"]
-            if aid in db["alphas"] and "pnl" in db["alphas"][aid]:
-                new["pnl"] = db["alphas"][aid]["pnl"]
-            entries.append(
-                {
-                    "alpha_id": aid,
-                    "event": "status_or_metric_changed",
-                    "old_status": old.get("status"),
-                    "new_status": new["status"],
-                    "sharpe": new["sharpe"],
-                    "fitness": new["fitness"],
-                    "turnover": new["turnover"],
-                    "lesson": f"状态从 {old.get('status')} 变为 {new['status']}",
-                }
-            )
-            if args.apply:
-                db["alphas"][aid] = new
-            print(f"  changed: {aid} | {old.get('status')} -> {new['status']}")
-
-        snippet = build_incremental_report(entries)
-
-    if not snippet.strip():
-        print("\nNo new empirical findings to record.")
-        return 0
-
-    print("\n" + "=" * 60)
-    print("PROPOSED SKILL.md APPEND SNIPPET")
-    print("=" * 60)
-    print(snippet)
-    print("=" * 60)
-
-    if args.apply:
-        append_to_skill(snippet)
-        db["last_update"] = datetime.now(timezone.utc).isoformat()
-        save_alpha_db(db)
-        print(f"\nAppended to {SKILL_PATH}")
-        print(f"alpha_db.json updated: {len(db['alphas'])} alphas tracked.")
-    else:
-        print("\nDry-run: SKILL.md and alpha_db.json were NOT modified. Use --apply to commit.")
-
-    return 0
+    if client:
+        if client.session:
+            client.session.close()
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

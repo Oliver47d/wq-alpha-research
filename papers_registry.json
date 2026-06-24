@@ -1,0 +1,22 @@
+{
+  "sources": {
+    "src_001": {
+      "type": "pdf",
+      "locator": "papers/alpha_101.pdf",
+      "hash": null,
+      "title": "101 Formulaic Alphas",
+      "status": "consumed",
+      "read_date": "2026-06-23",
+      "extracted_templates": [
+        "overnight_reversal",
+        "hybrid_tech_fundamental"
+      ],
+      "extraction_round": 1
+    }
+  },
+  "stats": {
+    "total": 1,
+    "consumed": 1,
+    "remaining": 0
+  }
+}

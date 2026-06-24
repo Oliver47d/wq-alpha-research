@@ -1,0 +1,36 @@
+{
+  "template_id": "hybrid_tech_fundamental",
+  "description": "技术-基本面混合因子：结合隔夜反转信号和盈利趋势信号",
+  "skeleton": "{weight_tech} * rank(-({tech_signal})) + {weight_fund} * group_rank(ts_rank({fund_numerator} / {fund_denominator}, {window}), {group})",
+  "field_pairs": [
+    {"tech_signal": "close/open", "fund_numerator": "operating_income", "fund_denominator": "equity"},
+    {"tech_signal": "close/open", "fund_numerator": "net_income", "fund_denominator": "equity"},
+    {"tech_signal": "ts_mean(close/open, 5)", "fund_numerator": "ebit", "fund_denominator": "equity"},
+    {"tech_signal": "ts_mean(close/open, 5)", "fund_numerator": "ebitda", "fund_denominator": "sales"}
+  ],
+  "param_ranges": {
+    "weight_tech": [0.3, 0.5],
+    "weight_fund": [0.5, 0.7],
+    "window": [126, 252],
+    "group": ["subindustry", "industry"]
+  },
+  "default_settings": {
+    "decay": 4,
+    "neutralization": "SUBINDUSTRY"
+  },
+  "hypothesis": "技术反转信号和基本面趋势信号互补，混合后可获得更稳定的收益",
+  "source": "alpha_101",
+  "created": "2026-06-24",
+  "proven_examples": [
+    {
+      "alpha_id": "RRpr7zlg",
+      "sharpe": 2.39,
+      "expression": "0.3 * rank(-(close/open)) + 0.7 * group_rank(ts_rank(operating_income / equity, 252), subindustry)"
+    },
+    {
+      "alpha_id": "GrwwQzpQ",
+      "sharpe": 2.81,
+      "expression": "0.5 * rank(-(ts_mean(close/open, 5))) + 0.5 * group_rank(ts_rank(ebitda / sales, 126), industry)"
+    }
+  ]
+}

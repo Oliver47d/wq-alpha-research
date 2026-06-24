@@ -1,0 +1,36 @@
+{
+  "template_id": "analyst_estimate_trend",
+  "description": "分析师预期趋势因子：用分析师预期数据的变化趋势预测收益",
+  "skeleton": "group_rank(ts_rank({estimate_field} / {denominator}, {window}), {group})",
+  "field_pairs": [
+    {"estimate_field": "est_eps", "denominator": "close"},
+    {"estimate_field": "est_revenue", "denominator": "cap"},
+    {"estimate_field": "est_ebitda", "denominator": "cap"},
+    {"estimate_field": "est_fcf", "denominator": "cap"},
+    {"estimate_field": "est_ptp", "denominator": "cap"},
+    {"estimate_field": "est_eps", "denominator": "cap"}
+  ],
+  "param_ranges": {
+    "window": [126, 252],
+    "group": ["industry", "subindustry"]
+  },
+  "default_settings": {
+    "decay": 0,
+    "neutralization": "SUBINDUSTRY"
+  },
+  "hypothesis": "分析师预期持续上调的股票未来收益更高",
+  "source": "active_alphas",
+  "created": "2026-06-24",
+  "proven_examples": [
+    {
+      "alpha_id": "omKKEEk6",
+      "sharpe": 2.13,
+      "expression": "group_rank(ts_rank(est_eps / close, 252), industry)"
+    },
+    {
+      "alpha_id": "1Y77GgoQ",
+      "sharpe": 1.62,
+      "expression": "group_rank(ts_rank(est_revenue / cap, 126), subindustry)"
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "template_id": "profitability_trend",
+  "description": "盈利趋势因子：用基本面数据的趋势变化预测横截面收益",
+  "skeleton": "group_rank(ts_rank({numerator} / {denominator}, {window}), {group})",
+  "field_pairs": [
+    {"numerator": "operating_income", "denominator": "equity"},
+    {"numerator": "net_income", "denominator": "equity"},
+    {"numerator": "operating_income", "denominator": "sales"},
+    {"numerator": "net_income", "denominator": "sales"},
+    {"numerator": "free_cash_flow", "denominator": "equity"},
+    {"numerator": "free_cash_flow", "denominator": "sales"},
+    {"numerator": "ebit", "denominator": "equity"},
+    {"numerator": "ebit", "denominator": "sales"},
+    {"numerator": "ebitda", "denominator": "equity"},
+    {"numerator": "ebitda", "denominator": "sales"},
+    {"numerator": "gross_profit", "denominator": "equity"},
+    {"numerator": "gross_profit", "denominator": "sales"},
+    {"numerator": "retained_earnings", "denominator": "equity"},
+    {"numerator": "retained_earnings", "denominator": "assets"}
+  ],
+  "param_ranges": {
+    "window": [63, 126, 252],
+    "group": ["subindustry", "industry", "sector"]
+  },
+  "default_settings": {
+    "decay": 0,
+    "neutralization": "SUBINDUSTRY"
+  },
+  "hypothesis": "盈利持续改善的公司未来收益更高，group_rank 控制行业效应",
+  "source": "active_alphas",
+  "created": "2026-06-24",
+  "proven_examples": [
+    {
+      "alpha_id": "zq9Wm0kK",
+      "sharpe": 2.01,
+      "expression": "group_rank(ts_rank(operating_income / equity, 252), subindustry)"
+    },
+    {
+      "alpha_id": "omKKaNK5",
+      "sharpe": 1.77,
+      "expression": "group_rank(ts_rank(net_income / equity, 126), industry)"
+    }
+  ]
+}

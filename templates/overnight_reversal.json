@@ -1,0 +1,27 @@
+{
+  "template_id": "overnight_reversal",
+  "description": "隔夜反转因子：利用隔夜收益的均值回归特性",
+  "skeleton": "rank(-({price_signal}))",
+  "field_pairs": [
+    {"price_signal": "close/open"},
+    {"price_signal": "ts_mean(close/open, 5)"},
+    {"price_signal": "ts_mean(close/open, 10)"}
+  ],
+  "param_ranges": {
+    "decay": [12, 15, 20]
+  },
+  "default_settings": {
+    "neutralization": "SUBINDUSTRY",
+    "delay": 1
+  },
+  "hypothesis": "隔夜跳空幅度大的股票存在日内反转效应，高跳空做空低跳空做多",
+  "source": "alpha_101",
+  "created": "2026-06-24",
+  "proven_examples": [
+    {
+      "alpha_id": "wpRe5oEd",
+      "sharpe": 1.21,
+      "expression": "rank(-(close/open))"
+    }
+  ]
+}

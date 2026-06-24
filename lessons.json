@@ -1,0 +1,190 @@
+{
+  "patterns": {
+    "profitability_trend": {
+      "description": "盈利趋势因子：用基本面数据的趋势变化预测横截面收益",
+      "tested": 20,
+      "passed": 6,
+      "pass_rate": 0.30,
+      "avg_sharpe": 1.23,
+      "avg_fitness": 0.92,
+      "best": {
+        "alpha_id": "zq9Wm0kK",
+        "sharpe": 2.01,
+        "expr": "group_rank(ts_rank(operating_income / equity, 252), subindustry)"
+      },
+      "failure_modes": {
+        "LOW_FITNESS": 8,
+        "LOW_SHARPE": 4,
+        "HIGH_TURNOVER": 2
+      },
+      "action": "expand",
+      "notes": "window=252 效果最好，subindustry 分组优于 industry"
+    },
+    "analyst_estimate_trend": {
+      "description": "分析师预期趋势因子",
+      "tested": 7,
+      "passed": 4,
+      "pass_rate": 0.57,
+      "avg_sharpe": 1.65,
+      "avg_fitness": 1.12,
+      "best": {
+        "alpha_id": "omKKEEk6",
+        "sharpe": 2.13,
+        "expr": "group_rank(ts_rank(est_eps / close, 252), industry)"
+      },
+      "failure_modes": {
+        "LOW_SHARPE": 2,
+        "SIM_ERROR": 1
+      },
+      "action": "expand",
+      "notes": "est_eps/close 是最强信号，window=252 优于 126"
+    },
+    "overnight_reversal": {
+      "description": "隔夜反转因子",
+      "tested": 6,
+      "passed": 2,
+      "pass_rate": 0.33,
+      "avg_sharpe": 0.95,
+      "avg_fitness": 0.78,
+      "best": {
+        "alpha_id": "wpRe5oEd",
+        "sharpe": 1.21,
+        "expr": "rank(-(close/open))"
+      },
+      "failure_modes": {
+        "LOW_SHARPE": 3,
+        "LOW_FITNESS": 1
+      },
+      "action": "deprioritize",
+      "notes": "单独使用效果一般，适合作为混合因子组件"
+    },
+    "hybrid_tech_fundamental": {
+      "description": "技术-基本面混合因子",
+      "tested": 5,
+      "passed": 3,
+      "pass_rate": 0.60,
+      "avg_sharpe": 1.89,
+      "avg_fitness": 1.25,
+      "best": {
+        "alpha_id": "GrwwQzpQ",
+        "sharpe": 2.81,
+        "expr": "0.5 * rank(-(ts_mean(close/open, 5))) + 0.5 * group_rank(ts_rank(ebitda / sales, 126), industry)"
+      },
+      "failure_modes": {
+        "LOW_SHARPE": 1,
+        "HIGH_TURNOVER": 1
+      },
+      "action": "expand",
+      "notes": "技术+基本面混合效果显著优于单独使用，weight 0.5/0.5 最稳定"
+    },
+    "low_volatility": {
+      "description": "低波动因子",
+      "tested": 2,
+      "passed": 0,
+      "pass_rate": 0.0,
+      "avg_sharpe": 0.52,
+      "avg_fitness": 0.41,
+      "best": null,
+      "failure_modes": {
+        "LOW_SHARPE": 2
+      },
+      "action": "skip",
+      "notes": "低波动因子在当前 universe 效果不佳"
+    },
+    "volume_price_divergence": {
+      "description": "量价背离因子",
+      "tested": 2,
+      "passed": 1,
+      "pass_rate": 0.50,
+      "avg_sharpe": 1.15,
+      "avg_fitness": 0.88,
+      "best": {
+        "alpha_id": "unknown",
+        "sharpe": 1.32,
+        "expr": "rank(volume * sign(close - open))"
+      },
+      "failure_modes": {
+        "LOW_FITNESS": 1
+      },
+      "action": "deprioritize",
+      "notes": "需要更多样本验证"
+    }
+  },
+  "param_insights": {
+    "window": {
+      "63": {
+        "avg_sharpe": 0.85,
+        "verdict": "deprioritize",
+        "notes": "短窗口效果较差",
+        "count": 8
+      },
+      "126": {
+        "avg_sharpe": 1.35,
+        "verdict": "neutral",
+        "notes": "",
+        "count": 12
+      },
+      "252": {
+        "avg_sharpe": 1.68,
+        "verdict": "prefer",
+        "notes": "长窗口效果最好",
+        "count": 10
+      }
+    },
+    "neutralization": {
+      "SUBINDUSTRY": {
+        "avg_sharpe": 1.52,
+        "verdict": "prefer",
+        "notes": "细粒度分组效果更好",
+        "count": 18
+      },
+      "INDUSTRY": {
+        "avg_sharpe": 1.28,
+        "verdict": "neutral",
+        "notes": "",
+        "count": 10
+      },
+      "SECTOR": {
+        "avg_sharpe": 1.05,
+        "verdict": "deprioritize",
+        "notes": "粗粒度分组效果一般",
+        "count": 4
+      }
+    },
+    "decay": {
+      "0": {
+        "avg_sharpe": 1.15,
+        "verdict": "neutral",
+        "notes": "",
+        "count": 15
+      },
+      "2": {
+        "avg_sharpe": 1.22,
+        "verdict": "neutral",
+        "notes": "",
+        "count": 5
+      },
+      "4": {
+        "avg_sharpe": 1.45,
+        "verdict": "prefer",
+        "notes": "轻微衰减效果好",
+        "count": 6
+      },
+      "12": {
+        "avg_sharpe": 0.95,
+        "verdict": "neutral",
+        "notes": "",
+        "count": 3
+      },
+      "20": {
+        "avg_sharpe": 0.88,
+        "verdict": "deprioritize",
+        "notes": "高衰减降低信号强度",
+        "count": 3
+      }
+    }
+  },
+  "_synced_alpha_ids": [],
+  "version": 1,
+  "last_updated": "2026-06-24T12:00:00+00:00"
+}
