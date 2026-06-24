@@ -1,6 +1,9 @@
 credential.txt
 alpha_db.json
 batch_submit_results.json
+alpha101_results.json
+alpha101_v2_results.json
+*.pdf
 *.pyc
 __pycache__/
 .DS_Store
