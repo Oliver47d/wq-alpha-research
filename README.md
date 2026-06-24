@@ -141,3 +141,11 @@ The following files are intentionally ignored:
 - Python caches and virtual environments
 
 If you want to publish research lessons from local runs, summarize them into general rules before adding them to `SKILL.md`. Do not publish raw alpha IDs, PnL series, account-linked submission statuses, or private candidate expressions.
+
+## Get in Touch
+
+Join the QuantML factor-research WeChat group, or scan the personal QR code to add me as a friend.
+
+| WeChat Group: QuantML Factor Research | Add Me as Friend |
+| :---: | :---: |
+| ![QuantML Factor Research Group QR](pic/20260624124943.jpg) | ![Add Friend QR](pic/20260624125220.jpg) |
