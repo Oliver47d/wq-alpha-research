@@ -1,0 +1,67 @@
+.gitignore
+  s_28489cb7df3b1c::t_dfe76b6add975c 10 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a3ba9069584dc8dca5cd72b","tool_type":"agent","tool_id":"Edit","line_ranges":[{"Single":10}]}]}
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "d8d0861b585d1ecd2c2bf0032d2424c7c4a3b628",
+  "prompts": {},
+  "sessions": {
+    "s_28489cb7df3b1c": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a3a66d89584dc8dca5cd3f1",
+        "model": "minimax-m2.7__dev"
+      },
+      "human_author": "Oliver47d <oliver@worldquant-research.github>"
+    }
+  },
+  "attestation_metadata": {
+    ".gitignore": [
+      {
+        "hash": "s_28489cb7df3b1c::t_dfe76b6add975c",
+        "line_ranges": [
+          {
+            "Single": 10
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a3ba9069584dc8dca5cd72b",
+            "tool_type": "agent",
+            "tool_id": "Edit",
+            "line_ranges": [
+              {
+                "Single": 10
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "remote_transcripts": {
+    "s_28489cb7df3b1c": {
+      "tool": "trae",
+      "conversation_id": "6a3a66d89584dc8dca5cd3f1",
+      "session_id": "6a3a66d89584dc8dca5cd3f1",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    },
+    "s_28489cb7df3b1c::t_36d09cdc24f617": {
+      "tool": "trae",
+      "conversation_id": "6a3a66d89584dc8dca5cd3f1",
+      "session_id": "6a3a66d89584dc8dca5cd3f1",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    },
+    "s_28489cb7df3b1c::t_dfe76b6add975c": {
+      "tool": "trae",
+      "conversation_id": "6a3a66d89584dc8dca5cd3f1",
+      "session_id": "6a3a66d89584dc8dca5cd3f1",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    }
+  }
+}
