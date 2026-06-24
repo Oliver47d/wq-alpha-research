@@ -257,6 +257,52 @@ def run_breadth_round(
 # Depth phase — fuel_one_paper via Agent CLI
 # ---------------------------------------------------------------------------
 
+def load_skill_knowledge() -> str:
+    """Extract key knowledge from SKILL.md to inject into DEPTH prompts.
+
+    This ensures the Agent has WorldQuant domain expertise even when
+    SKILL.md is not auto-loaded by the Claude Code skill system.
+    """
+    skill_path = SKILL_DIR / "SKILL.md"
+    if not skill_path.exists():
+        return "(SKILL.md not found)"
+
+    text = skill_path.read_text("utf-8", errors="ignore")
+
+    sections: list[str] = []
+
+    # Section 4: High-win-rate templates + recommended settings
+    sec4 = _extract_section(text, "## 4. \u56e0\u5b50\u6a21\u677f\u5e93", "## 5.")
+    if sec4:
+        sections.append("### HIGH-WIN-RATE TEMPLATES & DEFAULT SETTINGS\n" + sec4)
+
+    # Section 6: Problem diagnosis & fixes
+    sec6 = _extract_section(text, "## 6. \u95ee\u9898\u8bca\u65ad\u4e0e\u4fee\u590d", "## 7.")
+    if sec6:
+        sections.append("### PROBLEM DIAGNOSIS & FIXES\n" + sec6)
+
+    # Section 10: Core experience (one-liners)
+    sec10 = _extract_section(text, "## 10. \u6838\u5fc3\u7ecf\u9a8c", "## 11.")
+    if sec10:
+        sections.append("### CORE EXPERIENCE (ONE-LINERS)\n" + sec10)
+
+    if not sections:
+        return "(No relevant sections found in SKILL.md)"
+
+    return "\n\n".join(sections)
+
+
+def _extract_section(text: str, start_marker: str, end_marker: str) -> str:
+    """Extract a section from markdown text between two markers."""
+    start_idx = text.find(start_marker)
+    if start_idx == -1:
+        return ""
+    end_idx = text.find(end_marker, start_idx + len(start_marker))
+    if end_idx == -1:
+        end_idx = len(text)
+    return text[start_idx:end_idx].strip()
+
+
 def get_next_paper(reg: dict) -> str | None:
     """Find the next unread paper source ID."""
     for src_id, src in reg.get("sources", {}).items():
@@ -276,6 +322,17 @@ def fuel_one_paper(src_id: str, reg: dict, lessons: dict) -> bool:
     title = src.get("title", locator)
 
     print(f"\n[depth] Fueling from paper: {title} ({src_type})")
+
+    # Load SKILL.md knowledge for the prompt
+    skill_knowledge = load_skill_knowledge()
+    print(f"  [depth] Loaded SKILL.md knowledge ({len(skill_knowledge)} chars)")
+
+    # List existing templates so Agent avoids duplicates
+    existing_templates = [p.stem for p in TEMPLATES_DIR.glob("*.json")]
+    existing_list = ", ".join(existing_templates) if existing_templates else "(none)"
+
+    # Snapshot templates BEFORE agent runs (fix: was computed after agent ran)
+    templates_before = set(p.name for p in TEMPLATES_DIR.glob("*.json"))
 
     # Build the prompt for the Agent
     # Summarize lessons for the Agent to use as context
@@ -298,11 +355,16 @@ SOURCE TYPE: {src_type}
 SOURCE LOCATOR: {locator}
 SOURCE TITLE: {title}
 
+EXISTING TEMPLATES (do NOT duplicate these): {existing_list}
+
 PRIOR MINING LESSONS (use these to guide what templates to extract):
 {lessons_context}
 
 PARAMETER INSIGHTS:
 {param_context}
+
+DOMAIN KNOWLEDGE FROM SKILL.md (use these rules and patterns):
+{skill_knowledge}
 
 TASK:
 1. Read the source material thoroughly.
@@ -329,13 +391,17 @@ TASK:
   ]
 }}
 
-RULES:
+RULES (from SKILL.md domain knowledge):
 - Use ONLY fields that exist in references/wq_usa_top3000_delay1_data_fields.json
-- Prefer templates that are DIFFERENT from existing patterns in lessons
+- Prefer templates that are DIFFERENT from existing patterns in lessons and existing templates listed above
+- group_rank + ts_rank is the golden combination
+- SUBINDUSTRY neutralization has highest pass rate for fundamental signals
 - Window 126 and 252 tend to work better (from param insights)
-- SUBINDUSTRY neutralization works for fundamental signals
-- decay 2 is generally safe; avoid decay 20
+- Decay: 0 for fundamentals, 0-4 for analyst, 10-30 for technical reversal
+- Fundamental > hybrid > technical in terms of pass rate
+- Low correlation requires different DATA SOURCES, not just parameter tweaks
 - Each template should have 3-8 field_pairs
+- Include a clear "hypothesis" field explaining the economic logic
 - Write the JSON file(s) directly to {TEMPLATES_DIR}/
 
 Output the filenames you created."""
@@ -364,9 +430,7 @@ Output the filenames you created."""
                 output = result.stdout.strip()
                 print(f"  [depth] Agent output: {output[:200]}...")
 
-                # Check if new template files were created
-                templates_before = set(p.name for p in TEMPLATES_DIR.glob("*.json"))
-                # The agent should have written files; let's re-scan
+                # Check if new template files were created (templates_before was snapshotted before agent ran)
                 templates_after = set(p.name for p in TEMPLATES_DIR.glob("*.json"))
                 new_templates = templates_after - templates_before
 
@@ -404,7 +468,9 @@ Output the filenames you created."""
             continue
 
     # If we get here, all agent attempts failed
-    print(f"  [depth] All agent attempts failed for {src_id}")
+    print(f"  [depth] Claude CLI unavailable. Prompt saved to {prompt_file}")
+    print(f"  [depth] To fuel manually: copy the prompt to Mira Agent or another LLM")
+    print(f"  [depth] The prompt includes SKILL.md knowledge ({len(skill_knowledge)} chars) + lessons context")
     return False
 
 

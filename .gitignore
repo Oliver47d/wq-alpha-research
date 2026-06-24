@@ -3,6 +3,9 @@ alpha_db.json
 batch_submit_results.json
 alpha101_results.json
 alpha101_v2_results.json
+mining_state.json
+mining_report.json
+candidates.json
 *.pdf
 *.pyc
 __pycache__/
