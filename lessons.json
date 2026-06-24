@@ -4,7 +4,7 @@
       "description": "盈利趋势因子：用基本面数据的趋势变化预测横截面收益",
       "tested": 20,
       "passed": 6,
-      "pass_rate": 0.30,
+      "pass_rate": 0.3,
       "avg_sharpe": 1.23,
       "avg_fitness": 0.92,
       "best": {
@@ -22,11 +22,11 @@
     },
     "analyst_estimate_trend": {
       "description": "分析师预期趋势因子",
-      "tested": 7,
-      "passed": 4,
-      "pass_rate": 0.57,
-      "avg_sharpe": 1.65,
-      "avg_fitness": 1.12,
+      "tested": 11,
+      "passed": 5,
+      "pass_rate": 0.45454545454545453,
+      "avg_sharpe": 1.672222222222222,
+      "avg_fitness": 1.108888888888889,
       "best": {
         "alpha_id": "omKKEEk6",
         "sharpe": 2.13,
@@ -34,7 +34,7 @@
       },
       "failure_modes": {
         "LOW_SHARPE": 2,
-        "SIM_ERROR": 1
+        "SIM_ERROR": 4
       },
       "action": "expand",
       "notes": "est_eps/close 是最强信号，window=252 优于 126"
@@ -62,7 +62,7 @@
       "description": "技术-基本面混合因子",
       "tested": 5,
       "passed": 3,
-      "pass_rate": 0.60,
+      "pass_rate": 0.6,
       "avg_sharpe": 1.89,
       "avg_fitness": 1.25,
       "best": {
@@ -95,7 +95,7 @@
       "description": "量价背离因子",
       "tested": 2,
       "passed": 1,
-      "pass_rate": 0.50,
+      "pass_rate": 0.5,
       "avg_sharpe": 1.15,
       "avg_fitness": 0.88,
       "best": {
@@ -119,24 +119,24 @@
         "count": 8
       },
       "126": {
-        "avg_sharpe": 1.35,
+        "avg_sharpe": 1.385714285714286,
         "verdict": "neutral",
         "notes": "",
-        "count": 12
+        "count": 14
       },
       "252": {
         "avg_sharpe": 1.68,
         "verdict": "prefer",
         "notes": "长窗口效果最好",
-        "count": 10
+        "count": 12
       }
     },
     "neutralization": {
       "SUBINDUSTRY": {
-        "avg_sharpe": 1.52,
+        "avg_sharpe": 1.5365,
         "verdict": "prefer",
         "notes": "细粒度分组效果更好",
-        "count": 18
+        "count": 22
       },
       "INDUSTRY": {
         "avg_sharpe": 1.28,
@@ -153,10 +153,10 @@
     },
     "decay": {
       "0": {
-        "avg_sharpe": 1.15,
+        "avg_sharpe": 1.1911764705882353,
         "verdict": "neutral",
         "notes": "",
-        "count": 15
+        "count": 19
       },
       "2": {
         "avg_sharpe": 1.22,
@@ -182,9 +182,39 @@
         "notes": "高衰减降低信号强度",
         "count": 3
       }
+    },
+    "estimate_field": {
+      "est_eps": {
+        "avg_sharpe": 0.925,
+        "verdict": "neutral",
+        "notes": "",
+        "count": 4
+      }
+    },
+    "denominator": {
+      "close": {
+        "avg_sharpe": 0.925,
+        "verdict": "neutral",
+        "notes": "",
+        "count": 4
+      }
+    },
+    "group": {
+      "industry": {
+        "avg_sharpe": 0.0,
+        "verdict": "neutral",
+        "notes": "",
+        "count": 2
+      },
+      "subindustry": {
+        "avg_sharpe": 1.85,
+        "verdict": "neutral",
+        "notes": "",
+        "count": 2
+      }
     }
   },
   "_synced_alpha_ids": [],
   "version": 1,
-  "last_updated": "2026-06-24T12:00:00+00:00"
+  "last_updated": "2026-06-24T17:56:35.784090+00:00"
 }

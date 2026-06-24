@@ -55,6 +55,8 @@ ALPHA_DB_PATH = SKILL_DIR / "alpha_db.json"
 TEMPLATES_DIR = SKILL_DIR / "templates"
 REPORT_PATH = SKILL_DIR / "mining_report.json"
 STATE_PATH = SKILL_DIR / "mining_state.json"
+DEPTH_REQUEST_PATH = SKILL_DIR / "depth_request.json"
+DEPTH_RESPONSE_PATH = SKILL_DIR / "depth_response.json"
 
 # Agent CLI for depth extraction (5-minute timeout)
 AGENT_TIMEOUT = 300  # seconds
@@ -63,6 +65,7 @@ MAX_AGENT_FAILURES = 3
 # Round limits
 MAX_ROUNDS = 50  # safety cap
 MAX_CANDIDATES_PER_ROUND = 60
+DEPTH_BACKENDS = {"handoff", "claude", "manual", "none"}
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +202,32 @@ def build_candidates(lessons: dict, max_per_template: int = 15) -> list[dict]:
     return all_candidates
 
 
+def _compact_json(value: Any, max_chars: int = 2000) -> Any:
+    """Keep error payloads readable in mining reports."""
+    if value is None:
+        return None
+    text = json.dumps(value, ensure_ascii=False, default=str)
+    if len(text) <= max_chars:
+        return json.loads(text)
+    return text[:max_chars] + "...[truncated]"
+
+
+def _error_detail(result: dict[str, Any], sim: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "batch_idx": result.get("batch_idx"),
+        "expression": result.get("expression", ""),
+        "template_id": result.get("template_id", "unknown"),
+        "settings": result.get("settings", {}),
+        "status": sim.get("status"),
+        "status_code": sim.get("status_code"),
+        "error": sim.get("error"),
+        "attempts": sim.get("attempts"),
+        "simulation_id": sim.get("simulation_id"),
+        "alpha_id": sim.get("alpha_id"),
+        "sim_data": _compact_json(sim.get("sim_data")),
+    }
+
+
 def run_breadth_round(
     client: BrainClient,
     candidates: list[dict],
@@ -212,6 +241,7 @@ def run_breadth_round(
         "observed": [],
         "discarded": 0,
         "errors": 0,
+        "error_details": [],
         "new_active": 0,
     }
 
@@ -240,6 +270,7 @@ def run_breadth_round(
 
         if status != "COMPLETE":
             round_result["errors"] += 1
+            round_result["error_details"].append(_error_detail(r, sim))
             update_lessons_from_result(lessons, r, sim)
             continue
 
@@ -386,6 +417,167 @@ def get_next_paper(reg: dict) -> str | None:
         if src.get("status") == "unread":
             return src_id
     return None
+
+
+def _refresh_registry_stats(reg: dict) -> None:
+    sources = reg.get("sources", {})
+    reg["stats"] = {
+        "total": len(sources),
+        "consumed": sum(1 for s in sources.values() if s.get("status") == "consumed"),
+        "remaining": sum(1 for s in sources.values() if s.get("status") != "consumed"),
+    }
+
+
+def create_depth_request(src_id: str, reg: dict, lessons: dict, reason: str) -> dict[str, Any]:
+    """Create a handoff task for the outer Trae Agent/subagent depth phase."""
+    src = reg["sources"][src_id]
+    existing_templates = sorted(p.name for p in TEMPLATES_DIR.glob("*.json"))
+    request = {
+        "status": "NEED_AGENT",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "reason": reason,
+        "source_id": src_id,
+        "paper": {
+            "title": src.get("title", src.get("locator", "")),
+            "locator": src.get("locator", ""),
+            "type": src.get("type", "unknown"),
+        },
+        "paths": {
+            "skill_dir": str(SKILL_DIR),
+            "skill_path": str(SKILL_DIR / "SKILL.md"),
+            "templates_dir": str(TEMPLATES_DIR),
+            "lessons_path": str(LESSONS_PATH),
+            "fields_path": str(FIELDS_PATH),
+            "papers_registry_path": str(PAPERS_REGISTRY_PATH),
+            "depth_response_path": str(DEPTH_RESPONSE_PATH),
+        },
+        "existing_templates": existing_templates,
+        "lessons_summary": {
+            "patterns": lessons.get("patterns", {}),
+            "param_insights": lessons.get("param_insights", {}),
+        },
+        "agent_task": {
+            "instructions": [
+                "Read paths.skill_path first and follow its WorldQuant BRAIN alpha design rules.",
+                "Read paths.lessons_path and use prior mining lessons to avoid repeated failures.",
+                "Read the paper at paper.locator from this workspace.",
+                "Extract 1-3 WorldQuant BRAIN FASTEXPR template ideas.",
+                "Use only fields present in paths.fields_path.",
+                "Write valid template JSON files directly into paths.templates_dir.",
+                "Write depth_response.json with status=DONE, source_id, created_templates, and notes.",
+            ],
+            "template_contract": {
+                "required_keys": [
+                    "template_id",
+                    "description",
+                    "skeleton",
+                    "field_pairs",
+                    "param_ranges",
+                    "default_settings",
+                    "hypothesis",
+                    "source",
+                ],
+                "max_templates": 3,
+            },
+        },
+    }
+    DEPTH_REQUEST_PATH.write_text(json.dumps(request, indent=2, ensure_ascii=False), "utf-8")
+    reg["sources"][src_id]["status"] = "agent_requested"
+    reg["sources"][src_id]["request_date"] = request["created_at"]
+    _refresh_registry_stats(reg)
+    save_papers_registry(reg)
+    return request
+
+
+def consume_depth_response(reg: dict) -> str:
+    """Consume depth_response.json from the outer Agent and update paper registry.
+
+    Returns: absent | consumed | blocked.
+    """
+    if not DEPTH_RESPONSE_PATH.exists():
+        return "absent"
+
+    try:
+        response = json.loads(DEPTH_RESPONSE_PATH.read_text("utf-8"))
+    except json.JSONDecodeError as e:
+        print(f"[depth] Invalid depth response JSON: {e}")
+        return "blocked"
+
+    pending_request = None
+    if DEPTH_REQUEST_PATH.exists():
+        try:
+            pending_request = json.loads(DEPTH_REQUEST_PATH.read_text("utf-8"))
+        except json.JSONDecodeError as e:
+            print(f"[depth] Invalid pending depth request JSON: {e}")
+            return "blocked"
+    else:
+        print("[depth] depth_response.json exists without a matching depth_request.json.")
+        return "blocked"
+
+    if response.get("status") != "DONE":
+        print(f"[depth] Found depth response with status={response.get('status')}; leaving it untouched.")
+        return "blocked"
+
+    src_id = response.get("source_id")
+    if not src_id or src_id not in reg.get("sources", {}):
+        print(f"[depth] Invalid depth response source_id: {src_id}")
+        return "blocked"
+
+    if pending_request.get("source_id") != src_id:
+        print(
+            "[depth] Depth response source_id does not match pending request: "
+            f"response={src_id}, request={pending_request.get('source_id')}"
+        )
+        return "blocked"
+
+    created_templates = response.get("created_templates", [])
+    if not isinstance(created_templates, list):
+        print("[depth] Invalid depth response: created_templates must be a list")
+        return "blocked"
+
+    normalized_templates = []
+    missing = []
+    existing_templates = set(pending_request.get("existing_templates", []))
+    for name in created_templates:
+        if not isinstance(name, str):
+            print(f"[depth] Invalid template name in response: {name!r}")
+            return "blocked"
+        filename = name if str(name).endswith(".json") else f"{name}.json"
+        if filename in existing_templates:
+            print(f"[depth] Depth response references pre-existing template: {filename}")
+            return "blocked"
+        if Path(filename).name != filename:
+            print(f"[depth] Invalid template path in response: {filename}")
+            return "blocked"
+        template_path = (TEMPLATES_DIR / filename).resolve()
+        templates_root = TEMPLATES_DIR.resolve()
+        if template_path.parent != templates_root:
+            print(f"[depth] Template path escapes templates directory: {filename}")
+            return "blocked"
+        if template_path.exists():
+            normalized_templates.append(filename)
+        else:
+            missing.append(filename)
+    if missing:
+        print(f"[depth] Depth response references missing template files: {missing}")
+        return "blocked"
+
+    src = reg["sources"][src_id]
+    src["status"] = "consumed"
+    src["read_date"] = response.get("completed_at", datetime.now(timezone.utc).isoformat())
+    src["extracted_templates"] = normalized_templates
+    src["extraction_round"] = reg.get("stats", {}).get("consumed", 0) + 1
+    if response.get("notes"):
+        src["notes"] = response["notes"]
+    _refresh_registry_stats(reg)
+    save_papers_registry(reg)
+
+    DEPTH_RESPONSE_PATH.unlink()
+    if DEPTH_REQUEST_PATH.exists():
+        DEPTH_REQUEST_PATH.unlink()
+
+    print(f"[depth] Consumed depth response for {src_id}: {normalized_templates}")
+    return "consumed"
 
 
 def fuel_one_paper(src_id: str, reg: dict, lessons: dict) -> bool:
@@ -628,11 +820,17 @@ def should_terminate(state: dict, reg: dict, has_candidates: bool) -> tuple[bool
 # Main loop
 # ---------------------------------------------------------------------------
 
-def run_mining_loop(max_rounds: int | None = None, dry_run: bool = False) -> None:
+def run_mining_loop(
+    max_rounds: int | None = None,
+    dry_run: bool = False,
+    depth_backend: str = "handoff",
+) -> None:
     """Main entry point for the automatic alpha mining loop."""
     global MAX_ROUNDS
     if max_rounds:
         MAX_ROUNDS = max_rounds
+    if depth_backend not in DEPTH_BACKENDS:
+        raise ValueError(f"Invalid depth backend: {depth_backend}")
 
     print("=" * 70)
     print("  WorldQuant BRAIN — Automatic Alpha Discovery System")
@@ -640,6 +838,7 @@ def run_mining_loop(max_rounds: int | None = None, dry_run: bool = False) -> Non
     print(f"  Started: {datetime.now(timezone.utc).isoformat()}")
     print(f"  Max rounds: {MAX_ROUNDS}")
     print(f"  Max candidates per round: {MAX_CANDIDATES_PER_ROUND}")
+    print(f"  Depth backend: {depth_backend}")
     print(f"  Skill dir: {SKILL_DIR}")
     print("=" * 70)
 
@@ -648,6 +847,20 @@ def run_mining_loop(max_rounds: int | None = None, dry_run: bool = False) -> Non
     lessons = load_lessons()
     db = load_alpha_db()
     reg = load_papers_registry()
+    depth_response_status = consume_depth_response(reg)
+
+    if depth_backend == "handoff" and depth_response_status == "blocked":
+        print("\n[depth] A depth_response.json file exists but could not be safely consumed.")
+        print(f"  Response: {DEPTH_RESPONSE_PATH}")
+        print("  Fix or remove the response file before rerunning mining_loop.py.")
+        return
+
+    if depth_backend == "handoff" and DEPTH_REQUEST_PATH.exists() and not DEPTH_RESPONSE_PATH.exists():
+        print("\n[depth] Existing handoff request is pending.")
+        print(f"  Request:  {DEPTH_REQUEST_PATH}")
+        print(f"  Response: {DEPTH_RESPONSE_PATH}")
+        print("  Ask the outer Agent/subagent to process the request, then rerun mining_loop.py.")
+        return
 
     agent_failures = 0
 
@@ -734,8 +947,52 @@ def run_mining_loop(max_rounds: int | None = None, dry_run: bool = False) -> Non
                 print(f"\n[depth] Candidate pool empty. Reading next paper: {next_paper}")
                 fueled = False
 
+                if dry_run:
+                    if depth_backend == "none":
+                        print("[dry-run] Depth backend disabled; would not read paper.")
+                        round_data["depth_triggered"] = False
+                    elif depth_backend == "handoff":
+                        print(f"[dry-run] Would create depth handoff request for {next_paper}")
+                        round_data["depth_triggered"] = True
+                    else:
+                        print(f"[dry-run] Would extract depth source {next_paper} using backend={depth_backend}")
+                        round_data["depth_triggered"] = True
+                    round_data["depth_backend"] = depth_backend
+                    round_data["paper_read"] = next_paper
+                    state["rounds"].append(round_data)
+                    save_state(state)
+                    return
+
+                if depth_backend == "handoff":
+                    request = create_depth_request(
+                        next_paper,
+                        reg,
+                        lessons,
+                        reason="candidate_pool_empty",
+                    )
+                    round_data["depth_triggered"] = True
+                    round_data["depth_backend"] = "handoff"
+                    round_data["paper_read"] = next_paper
+                    round_data["depth_request"] = str(DEPTH_REQUEST_PATH)
+                    state["rounds"].append(round_data)
+                    save_state(state)
+                    print("\n[depth] Handoff request created.")
+                    print(f"  Source:   {request['source_id']} — {request['paper']['title']}")
+                    print(f"  Request:  {DEPTH_REQUEST_PATH}")
+                    print(f"  Response: {DEPTH_RESPONSE_PATH}")
+                    print("  Process this request with the outer Agent/subagent, then rerun mining_loop.py.")
+                    return
+
+                if depth_backend == "none":
+                    print("[depth] Depth backend disabled; skipping paper extraction.")
+                    round_data["depth_triggered"] = False
+                    round_data["depth_backend"] = "none"
+                    state["rounds"].append(round_data)
+                    save_state(state)
+                    return
+
                 # Try Agent CLI first
-                if agent_failures < MAX_AGENT_FAILURES:
+                if depth_backend == "claude" and agent_failures < MAX_AGENT_FAILURES:
                     try:
                         fueled = fuel_one_paper(next_paper, reg, lessons)
                     except Exception as e:
@@ -743,11 +1000,12 @@ def run_mining_loop(max_rounds: int | None = None, dry_run: bool = False) -> Non
                         agent_failures += 1
 
                 # Fallback to manual
-                if not fueled and agent_failures >= MAX_AGENT_FAILURES:
+                if depth_backend == "manual" or (not fueled and agent_failures >= MAX_AGENT_FAILURES):
                     print(f"\n[depth] Agent failed {agent_failures} times. Falling back to manual extraction.")
                     fuel_one_paper_manual(next_paper, reg, lessons)
 
                 round_data["depth_triggered"] = True
+                round_data["depth_backend"] = depth_backend
                 round_data["paper_read"] = next_paper
 
                 # After reading a paper, continue to next breadth round
@@ -824,13 +1082,23 @@ def main():
         "--reset-state", action="store_true",
         help="Reset mining state before starting.",
     )
+    parser.add_argument(
+        "--depth-backend",
+        choices=sorted(DEPTH_BACKENDS),
+        default="handoff",
+        help="Depth extraction backend. handoff creates depth_request.json for the outer Agent/subagent.",
+    )
     args = parser.parse_args()
 
     if args.reset_state and STATE_PATH.exists():
         STATE_PATH.unlink()
         print("[init] Mining state reset.")
 
-    run_mining_loop(max_rounds=args.max_rounds, dry_run=args.dry_run)
+    run_mining_loop(
+        max_rounds=args.max_rounds,
+        dry_run=args.dry_run,
+        depth_backend=args.depth_backend,
+    )
 
 
 if __name__ == "__main__":

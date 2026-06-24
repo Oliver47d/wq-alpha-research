@@ -235,8 +235,32 @@ class BrainClient:
             time.sleep(5)
         return {"status": "TIMEOUT", "simulation_id": sim_id}
 
+    def _is_retryable_sim_error(self, sim_result: dict[str, Any]) -> bool:
+        """Return True for transient API/network failures worth retrying."""
+        status = sim_result.get("status")
+        status_code = sim_result.get("status_code")
+        error = str(sim_result.get("error", "")).lower()
+
+        if status == "TIMEOUT":
+            # A TIMEOUT from _poll_simulation means the simulation was already
+            # created; retrying would POST a duplicate simulation.
+            return False
+        if isinstance(status_code, int) and status_code in {429, 500, 502, 503, 504}:
+            return True
+        transient_markers = (
+            "429",
+            "timeout",
+            "timed out",
+            "connection",
+            "temporarily",
+        )
+        return any(marker in error for marker in transient_markers)
+
     def batch_simulate(
-        self, candidates: list[dict], max_concurrent: int | None = None
+        self,
+        candidates: list[dict],
+        max_concurrent: int | None = None,
+        max_retries: int = 2,
     ) -> list[dict[str, Any]]:
         """Simulate a batch of candidates with limited concurrency.
 
@@ -251,11 +275,26 @@ class BrainClient:
         def _run_one(idx: int, cand: dict) -> dict[str, Any]:
             expr = cand["expression"]
             settings = cand.get("settings", {})
-            try:
-                sim_result = self.simulate(expr, settings)
-                return {**cand, "sim_result": sim_result, "batch_idx": idx}
-            except Exception as e:
-                return {**cand, "sim_result": {"status": "ERROR", "error": str(e)}, "batch_idx": idx}
+            for attempt in range(max_retries + 1):
+                try:
+                    sim_result = self.simulate(expr, settings)
+                except Exception as e:
+                    sim_result = {"status": "ERROR", "error": str(e)}
+
+                sim_result["attempts"] = attempt + 1
+                retryable = self._is_retryable_sim_error(sim_result)
+                if not retryable or attempt >= max_retries:
+                    return {**cand, "sim_result": sim_result, "batch_idx": idx}
+
+                sleep_s = min(30, 5 * (attempt + 1))
+                print(
+                    f"  [retry] transient simulation error; retrying {attempt + 1}/{max_retries} "
+                    f"after {sleep_s}s — {expr[:50]}",
+                    flush=True,
+                )
+                time.sleep(sleep_s)
+
+            return {**cand, "sim_result": sim_result, "batch_idx": idx}
 
         with ThreadPoolExecutor(max_workers=concurrency) as pool:
             futures = {

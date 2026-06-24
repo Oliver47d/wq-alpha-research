@@ -1,0 +1,62 @@
+{
+  "template_id": "institutional_sentiment_proxy",
+  "description": "基于机构持股信息的Portable Alpha策略增强 - 使用分析师推荐作为机构情绪代理。论文核心发现：控制市值后，机构持股股票年化超额收益约3%，胜率75%。本数据集无直接机构持股字段，使用分析师买入推荐比例作为机构情绪代理变量。",
+  "skeleton": "group_rank(ts_rank({numerator} / {denominator}, {window}), {group})",
+  "field_pairs": [
+    {
+      "numerator": "anl4_buy",
+      "denominator": "anl4_total_rec",
+      "description": "买入推荐占比 - 机构情绪代理"
+    },
+    {
+      "numerator": "anl4_buy",
+      "denominator": "anl4_buy + anl4_under",
+      "description": "买入vs低配比率 - 机构多空分歧"
+    },
+    {
+      "numerator": "anl4_mark",
+      "denominator": "1",
+      "description": "推荐共识得分直接使用"
+    },
+    {
+      "numerator": "anl4_buy",
+      "denominator": "cap",
+      "description": "买入推荐数/市值 - 控制市值规模的机构关注度"
+    },
+    {
+      "numerator": "anl4_total_rec",
+      "denominator": "cap",
+      "description": "总推荐数/市值 - 规模调整后的分析师覆盖度"
+    },
+    {
+      "numerator": "anl4_buy",
+      "denominator": "sharesout",
+      "description": "买入推荐/流通股 - 每股机构关注度"
+    }
+  ],
+  "param_ranges": {
+    "window": [
+      63,
+      126,
+      252
+    ],
+    "group": [
+      "subindustry",
+      "industry",
+      "sector"
+    ]
+  },
+  "default_settings": {
+    "decay": 5,
+    "neutralization": "SUBINDUSTRY",
+    "pasteurization": "ON",
+    "unit_handling": "VERIFY",
+    "nan_handling": "OFF",
+    "language": "FASTEXPR",
+    "visualization": false
+  },
+  "hypothesis": "机构投资者通过分析师推荐表达观点。买入推荐比例的时序排名变化反映机构情绪趋势。控制市值后，高机构关注度股票表现优于低关注度股票。ts_rank捕捉情绪变化趋势，group_rank在同行业内横截面对比。",
+  "source": "paper_010",
+  "source_title": "基于机构持股信息的Portable_Alpha策略增强",
+  "proven_examples": []
+}

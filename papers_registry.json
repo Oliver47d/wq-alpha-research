@@ -23,7 +23,11 @@
       "locator": "papers/10. 基于机构持股信息的Portable_Alpha策略增强.pdf",
       "title": "基于机构持股信息的Portable_Alpha策略增强",
       "type": "research_report",
-      "status": "unread"
+      "status": "consumed",
+      "extracted_templates": [
+        "institutional_sentiment_proxy"
+      ],
+      "extraction_date": "2026-06-25"
     },
     "src_004": {
       "locator": "papers/11. Level2行情选股因子初探.pdf",
