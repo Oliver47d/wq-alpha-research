@@ -1,0 +1,21 @@
+.gitignore
+  s_28489cb7df3b1c::t_0abfbc9c28944f 4-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "ce34674392f9d503e3d2f84a086e0435d71ef0b4",
+  "prompts": {},
+  "sessions": {
+    "s_28489cb7df3b1c": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a3a66d89584dc8dca5cd3f1",
+        "model": "minimax-m2.7__dev"
+      },
+      "human_author": null
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
