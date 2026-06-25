@@ -138,6 +138,15 @@ class ExpressionValidator:
             ids.append(tok)
         return ids
 
+    def _scientific_notation(self, expr: str) -> list[str]:
+        """BRAIN's FASTEXPR parser rejects scientific-notation literals
+        (e.g. `1e-6`, `2.5E3`) — it chokes on the 'e' with
+        "Unexpected character 'e'". Our local identifier scrubber happily
+        strips these, so they pass field validation but fail at simulation.
+        Catch them up front and tell the LLM to use a plain decimal instead.
+        """
+        return sorted(set(re.findall(r"\b\d+\.?\d*[eE][+-]?\d+\b", expr)))
+
     def validate(self, expr: str) -> tuple[bool, list[str]]:
         """Return (ok, errors)."""
         errors: list[str] = []
@@ -145,6 +154,12 @@ class ExpressionValidator:
             return False, ["empty expression"]
         if not self._balanced(expr):
             errors.append("unbalanced parentheses")
+        sci = self._scientific_notation(expr)
+        if sci:
+            errors.append(
+                f"scientific-notation literal(s) not supported by BRAIN: {sci} "
+                "(use a plain decimal, e.g. 0.000001 instead of 1e-6)"
+            )
         unknown_fns = self._unknown_function_calls(expr)
         if unknown_fns:
             errors.append(f"unknown operator(s): {unknown_fns}")
@@ -202,6 +217,7 @@ def build_generation_request(
             "Fields must come from price/volume builtins or fields_menu (full list in references).",
             f"Price/volume builtins: {sorted(PRICE_VOLUME_BUILTINS)}.",
             "Prefer cross-sectional neutralization (rank/group_rank) for stationarity.",
+            "Use plain decimals for small constants (e.g. 0.000001), NOT scientific notation like 1e-6 — BRAIN's parser rejects it.",
             "Avoid reusing concepts marked 'deprioritize' in lessons_summary.",
         ],
         "fields_menu_sample": _field_menu(fv),
@@ -270,7 +286,7 @@ def to_candidates(
 # --------------------------------------------------------------------------- #
 SAMPLE_LLM_ITEMS = [
     {
-        "expression": "group_rank(ts_mean(returns, 20) / (ts_std_dev(returns, 20) + 1e-6), subindustry)",
+        "expression": "group_rank(ts_mean(returns, 20) / (ts_std_dev(returns, 20) + 0.000001), subindustry)",
         "hypothesis": "Risk-adjusted momentum, industry-neutral.",
         "settings": {"decay": 8},
     },
@@ -295,6 +311,11 @@ SAMPLE_LLM_ITEMS = [
     {
         # invalid: unbalanced parens
         "expression": "rank(ts_mean(returns, 10)",
+        "hypothesis": "should be rejected",
+    },
+    {
+        # invalid: scientific-notation literal (BRAIN parser rejects '1e-6')
+        "expression": "rank(returns / (ts_std_dev(returns, 20) + 1e-6))",
         "hypothesis": "should be rejected",
     },
 ]
@@ -348,7 +369,7 @@ def main() -> None:
     if args.cmd == "selftest":
         print("Loading field reference for validation...")
         cands, rejected = to_candidates(SAMPLE_LLM_ITEMS)
-        print(f"\nAccepted {len(cands)} / rejected {len(rejected)} (expect 3 / 3)\n")
+        print(f"\nAccepted {len(cands)} / rejected {len(rejected)} (expect 3 / 4)\n")
         for c in cands:
             print(f"  [ok] {c['expression']}")
             print(f"        concept_id = {c['concept_id']}")

@@ -50,6 +50,10 @@ from generate_candidates import (  # noqa: E402
     expand_template,
     load_templates,
 )
+from llm_producer import (  # noqa: E402
+    build_generation_request,
+    to_candidates as llm_to_candidates,
+)
 
 LESSONS_PATH = SKILL_DIR / "lessons.json"
 PAPERS_REGISTRY_PATH = SKILL_DIR / "papers_registry.json"
@@ -59,6 +63,8 @@ REPORT_PATH = SKILL_DIR / "mining_report.json"
 STATE_PATH = SKILL_DIR / "mining_state.json"
 DEPTH_REQUEST_PATH = SKILL_DIR / "depth_request.json"
 DEPTH_RESPONSE_PATH = SKILL_DIR / "depth_response.json"
+LLM_REQUEST_PATH = SKILL_DIR / "llm_request.json"
+LLM_RESPONSE_PATH = SKILL_DIR / "llm_response.json"
 
 # Agent CLI for depth extraction (5-minute timeout)
 AGENT_TIMEOUT = 300  # seconds
@@ -68,6 +74,7 @@ MAX_AGENT_FAILURES = 3
 MAX_ROUNDS = 50  # safety cap
 MAX_CANDIDATES_PER_ROUND = 60
 DEPTH_BACKENDS = {"handoff", "claude", "manual", "none"}
+PRODUCERS = {"template", "llm"}
 
 LOG_LEVEL = os.getenv("WQ_LOG_LEVEL", "INFO").upper()
 if not logging.getLogger().handlers:
@@ -81,6 +88,21 @@ logger = logging.getLogger(__name__)
 def _expr_fingerprint(expression: str) -> str:
     """Stable short identifier for an expression without logging the formula."""
     return hashlib.sha1(expression.encode("utf-8")).hexdigest()[:12]
+
+
+def _expr_text(expression: Any) -> str:
+    """Normalize an alpha expression to a plain string.
+
+    Remote BRAIN alpha records store the formula as a dict
+    ({"code": "<FASTEXPR>", "description": ..., "operatorCount": ...}),
+    while locally simulated candidates store a bare string. Accept both
+    (and None) so report/serialization code can always slice safely.
+    """
+    if isinstance(expression, dict):
+        return str(expression.get("code") or "")
+    if expression is None:
+        return ""
+    return str(expression)
 
 
 def _text_fingerprint(text: str) -> str | None:
@@ -215,7 +237,81 @@ def save_papers_registry(reg: dict) -> None:
 # Breadth phase
 # ---------------------------------------------------------------------------
 
-def build_candidates(lessons: dict, max_per_template: int = 15) -> list[dict]:
+def build_candidates(
+    lessons: dict,
+    max_per_template: int = 15,
+    producer: str = "template",
+) -> list[dict]:
+    """Produce candidates for one round.
+
+    The pipeline downstream (simulate / filter / correlate / submit / lessons)
+    consumes candidates through a stable *seam*:
+        {"expression", "settings", "template_id", "params", ...}
+    and does not care how they were produced. This dispatcher lets a round be
+    fed either by the template grid (breadth default) or by the LLM producer
+    (which reads llm_response.json — see llm_producer.py).
+    """
+    if producer not in PRODUCERS:
+        raise ValueError(f"Invalid producer: {producer} (choose from {sorted(PRODUCERS)})")
+    if producer == "llm":
+        return build_candidates_llm(lessons)
+    return build_candidates_template(lessons, max_per_template=max_per_template)
+
+
+def build_candidates_llm(lessons: dict) -> list[dict]:
+    """LLM producer: read llm_response.json → validated drop-in candidates.
+
+    Mirrors the depth phase's file-handoff contract: an outer agent/LLM fills
+    llm_response.json (schema described by build_generation_request). We never
+    call a model endpoint from here. If no response exists, write a request
+    stub for the agent and return no candidates (so the round becomes a no-op
+    rather than crashing).
+    """
+    if not LLM_RESPONSE_PATH.exists():
+        req = build_generation_request(lessons, n=8)
+        LLM_REQUEST_PATH.write_text(
+            json.dumps(req, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        logger.info("LLM producer: no response yet, wrote request stub path=%s", LLM_REQUEST_PATH)
+        print(f"  [llm] No {LLM_RESPONSE_PATH.name}; wrote request to {LLM_REQUEST_PATH.name}. "
+              "Have the agent fill it, then rerun.")
+        return []
+
+    try:
+        resp = json.loads(LLM_RESPONSE_PATH.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.info("LLM producer: failed to parse response path=%s error=%s", LLM_RESPONSE_PATH, e)
+        print(f"  [llm] Failed to parse {LLM_RESPONSE_PATH.name}: {e}")
+        return []
+
+    items = resp.get("items", [])
+    cands, rejected = llm_to_candidates(items)
+    logger.info(
+        "LLM producer built candidates accepted=%s rejected=%s response_path=%s",
+        len(cands), len(rejected), LLM_RESPONSE_PATH,
+    )
+    print(f"  [llm] Accepted {len(cands)} candidate(s), rejected {len(rejected)} from {LLM_RESPONSE_PATH.name}")
+    for r in rejected:
+        logger.info("LLM candidate rejected expr=%r errors=%s", str(r.get("expression"))[:80], r.get("errors"))
+
+    # Honor lessons concept-level skip actions (LLM uses concept_id as the key).
+    patterns = lessons.get("patterns", {})
+    kept: list[dict] = []
+    for c in cands:
+        cid = c.get("concept_id", c.get("template_id"))
+        if patterns.get(cid, {}).get("action") == "skip":
+            logger.info("LLM candidate skipped by lessons concept_id=%s", cid)
+            continue
+        kept.append(c)
+
+    if len(kept) > MAX_CANDIDATES_PER_ROUND:
+        kept = kept[:MAX_CANDIDATES_PER_ROUND]
+        print(f"  [cap] Truncated to {MAX_CANDIDATES_PER_ROUND} candidates")
+    logger.info("LLM producer complete candidate_count=%s", len(kept))
+    return kept
+
+
+def build_candidates_template(lessons: dict, max_per_template: int = 15) -> list[dict]:
     """Expand all templates into candidates, filtered by lessons actions."""
     templates = load_templates()
     logger.info("Build candidates start template_count=%s max_per_template=%s", len(templates), max_per_template)
@@ -1120,6 +1216,7 @@ def run_mining_loop(
     max_rounds: int | None = None,
     dry_run: bool = False,
     depth_backend: str = "handoff",
+    producer: str = "template",
 ) -> None:
     """Main entry point for the automatic alpha mining loop."""
     global MAX_ROUNDS
@@ -1127,12 +1224,15 @@ def run_mining_loop(
         MAX_ROUNDS = max_rounds
     if depth_backend not in DEPTH_BACKENDS:
         raise ValueError(f"Invalid depth backend: {depth_backend}")
+    if producer not in PRODUCERS:
+        raise ValueError(f"Invalid producer: {producer}")
 
     logger.info(
-        "Mining loop start max_rounds=%s dry_run=%s depth_backend=%s skill_dir=%s",
+        "Mining loop start max_rounds=%s dry_run=%s depth_backend=%s producer=%s skill_dir=%s",
         MAX_ROUNDS,
         dry_run,
         depth_backend,
+        producer,
         SKILL_DIR,
     )
     print("=" * 70)
@@ -1142,6 +1242,7 @@ def run_mining_loop(
     print(f"  Max rounds: {MAX_ROUNDS}")
     print(f"  Max candidates per round: {MAX_CANDIDATES_PER_ROUND}")
     print(f"  Depth backend: {depth_backend}")
+    print(f"  Producer: {producer}")
     print(f"  Skill dir: {SKILL_DIR}")
     print("=" * 70)
 
@@ -1252,8 +1353,8 @@ def run_mining_loop(
                 "candidate_count": 0,
             }
         else:
-            print("\n[breadth] Building candidates from templates...")
-            candidates = build_candidates(lessons)
+            print(f"\n[breadth] Building candidates (producer={producer})...")
+            candidates = build_candidates(lessons, producer=producer)
             has_candidates = len(candidates) > 0
             logger.info("Round candidates built round=%s candidate_count=%s", round_num, len(candidates))
 
@@ -1495,7 +1596,7 @@ def run_mining_loop(
         "lessons_snapshot": lessons,
         "papers_registry_snapshot": load_papers_registry(),
         "active_alphas": {
-            aid: {"sharpe": a.get("sharpe"), "expression": a.get("expression", "")[:100]}
+            aid: {"sharpe": a.get("sharpe"), "expression": _expr_text(a.get("expression"))[:100]}
             for aid, a in db.get("alphas", {}).items()
             if a.get("status") == "ACTIVE"
         },
@@ -1552,13 +1653,21 @@ def main():
         default="handoff",
         help="Depth extraction backend. handoff creates depth_request.json for the outer Agent/subagent.",
     )
+    parser.add_argument(
+        "--producer",
+        choices=sorted(PRODUCERS),
+        default="template",
+        help="Candidate producer. template expands the template grid; "
+             "llm reads llm_response.json (file handoff, see llm_producer.py).",
+    )
     args = parser.parse_args()
     logger.info(
-        "CLI args parsed max_rounds=%s dry_run=%s reset_state=%s depth_backend=%s",
+        "CLI args parsed max_rounds=%s dry_run=%s reset_state=%s depth_backend=%s producer=%s",
         args.max_rounds,
         args.dry_run,
         args.reset_state,
         args.depth_backend,
+        args.producer,
     )
 
     if args.reset_state and STATE_PATH.exists():
@@ -1570,6 +1679,7 @@ def main():
         max_rounds=args.max_rounds,
         dry_run=args.dry_run,
         depth_backend=args.depth_backend,
+        producer=args.producer,
     )
 
 
