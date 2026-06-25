@@ -2,69 +2,74 @@
   "patterns": {
     "profitability_trend": {
       "description": "盈利趋势因子：用基本面数据的趋势变化预测横截面收益",
-      "tested": 20,
+      "tested": 42,
       "passed": 6,
-      "pass_rate": 0.3,
-      "avg_sharpe": 1.23,
-      "avg_fitness": 0.92,
+      "pass_rate": 0.14285714285714285,
+      "avg_sharpe": 1.3044727891156465,
+      "avg_fitness": 0.8707312925170069,
       "best": {
         "alpha_id": "zq9Wm0kK",
         "sharpe": 2.01,
         "expr": "group_rank(ts_rank(operating_income / equity, 252), subindustry)"
       },
       "failure_modes": {
-        "LOW_FITNESS": 8,
+        "LOW_FITNESS": 20,
         "LOW_SHARPE": 4,
-        "HIGH_TURNOVER": 2
+        "HIGH_TURNOVER": 2,
+        "HIGH_CORR": 4,
+        "SIM_ERROR": 6
       },
-      "action": "expand",
+      "action": "deprioritize",
       "notes": "window=252 效果最好，subindustry 分组优于 industry"
     },
     "analyst_estimate_trend": {
       "description": "分析师预期趋势因子",
-      "tested": 11,
+      "tested": 52,
       "passed": 5,
-      "pass_rate": 0.45454545454545453,
-      "avg_sharpe": 1.672222222222222,
-      "avg_fitness": 1.108888888888889,
+      "pass_rate": 0.09615384615384616,
+      "avg_sharpe": 1.5273486741179048,
+      "avg_fitness": 0.9458407845715538,
       "best": {
         "alpha_id": "omKKEEk6",
         "sharpe": 2.13,
         "expr": "group_rank(ts_rank(est_eps / close, 252), industry)"
       },
       "failure_modes": {
-        "LOW_SHARPE": 2,
-        "SIM_ERROR": 4
+        "LOW_SHARPE": 10,
+        "SIM_ERROR": 12,
+        "HIGH_CORR": 18,
+        "LOW_FITNESS": 7
       },
-      "action": "expand",
+      "action": "deprioritize",
       "notes": "est_eps/close 是最强信号，window=252 优于 126"
     },
     "overnight_reversal": {
       "description": "隔夜反转因子",
-      "tested": 6,
+      "tested": 39,
       "passed": 2,
-      "pass_rate": 0.33,
-      "avg_sharpe": 0.95,
-      "avg_fitness": 0.78,
+      "pass_rate": 0.05128205128205128,
+      "avg_sharpe": 1.1206787330316739,
+      "avg_fitness": 0.7581447963800907,
       "best": {
-        "alpha_id": "wpRe5oEd",
-        "sharpe": 1.21,
+        "alpha_id": "88zQlKA7",
+        "sharpe": 1.58,
         "expr": "rank(-(close/open))"
       },
       "failure_modes": {
-        "LOW_SHARPE": 3,
-        "LOW_FITNESS": 1
+        "LOW_SHARPE": 9,
+        "LOW_FITNESS": 16,
+        "SIM_ERROR": 12
       },
       "action": "deprioritize",
       "notes": "单独使用效果一般，适合作为混合因子组件"
     },
     "hybrid_tech_fundamental": {
       "description": "技术-基本面混合因子",
-      "tested": 5,
+      "tested": 46,
       "passed": 3,
-      "pass_rate": 0.6,
-      "avg_sharpe": 1.89,
-      "avg_fitness": 1.25,
+      "pass_rate": 0.06521739130434782,
+      "avg_sharpe": 2.3771420996818673,
+      "avg_fitness": 1.5511055143160128,
       "best": {
         "alpha_id": "GrwwQzpQ",
         "sharpe": 2.81,
@@ -72,9 +77,11 @@
       },
       "failure_modes": {
         "LOW_SHARPE": 1,
-        "HIGH_TURNOVER": 1
+        "HIGH_TURNOVER": 1,
+        "HIGH_CORR": 30,
+        "SIM_ERROR": 11
       },
-      "action": "expand",
+      "action": "deprioritize",
       "notes": "技术+基本面混合效果显著优于单独使用，weight 0.5/0.5 最稳定"
     },
     "low_volatility": {
@@ -108,35 +115,49 @@
       },
       "action": "deprioritize",
       "notes": "需要更多样本验证"
+    },
+    "institutional_sentiment_proxy": {
+      "description": "Template: institutional_sentiment_proxy",
+      "tested": 15,
+      "passed": 0,
+      "pass_rate": 0.0,
+      "avg_sharpe": 0.0,
+      "avg_fitness": 0.0,
+      "best": null,
+      "failure_modes": {
+        "SIM_ERROR": 15
+      },
+      "action": "skip",
+      "notes": ""
     }
   },
   "param_insights": {
     "window": {
       "63": {
-        "avg_sharpe": 0.85,
+        "avg_sharpe": 0.9640686274509802,
         "verdict": "deprioritize",
         "notes": "短窗口效果较差",
-        "count": 8
+        "count": 24
       },
       "126": {
-        "avg_sharpe": 1.385714285714286,
-        "verdict": "neutral",
+        "avg_sharpe": 1.7750781003011697,
+        "verdict": "prefer",
         "notes": "",
-        "count": 14
+        "count": 73
       },
       "252": {
-        "avg_sharpe": 1.68,
+        "avg_sharpe": 1.8029208569656154,
         "verdict": "prefer",
         "notes": "长窗口效果最好",
-        "count": 12
+        "count": 56
       }
     },
     "neutralization": {
       "SUBINDUSTRY": {
-        "avg_sharpe": 1.5365,
+        "avg_sharpe": 1.68211313247817,
         "verdict": "prefer",
         "notes": "细粒度分组效果更好",
-        "count": 22
+        "count": 174
       },
       "INDUSTRY": {
         "avg_sharpe": 1.28,
@@ -153,10 +174,10 @@
     },
     "decay": {
       "0": {
-        "avg_sharpe": 1.1911764705882353,
+        "avg_sharpe": 1.3721386447261839,
         "verdict": "neutral",
         "notes": "",
-        "count": 19
+        "count": 82
       },
       "2": {
         "avg_sharpe": 1.22,
@@ -165,56 +186,210 @@
         "count": 5
       },
       "4": {
-        "avg_sharpe": 1.45,
+        "avg_sharpe": 2.280276933468423,
         "verdict": "prefer",
         "notes": "轻微衰减效果好",
-        "count": 6
+        "count": 47
       },
       "12": {
-        "avg_sharpe": 0.95,
+        "avg_sharpe": 1.1063333333333334,
         "verdict": "neutral",
         "notes": "",
-        "count": 3
+        "count": 17
       },
       "20": {
-        "avg_sharpe": 0.88,
+        "avg_sharpe": 1.0376363636363635,
         "verdict": "deprioritize",
         "notes": "高衰减降低信号强度",
-        "count": 3
+        "count": 12
+      },
+      "5": {
+        "avg_sharpe": 0.0,
+        "verdict": "neutral",
+        "notes": "",
+        "count": 15
+      },
+      "15": {
+        "avg_sharpe": 1.25,
+        "verdict": "neutral",
+        "notes": "",
+        "count": 10
       }
     },
     "estimate_field": {
       "est_eps": {
-        "avg_sharpe": 0.925,
+        "avg_sharpe": 1.7081944444444446,
+        "verdict": "prefer",
+        "notes": "",
+        "count": 22
+      },
+      "est_bookvalue_ps": {
+        "avg_sharpe": 0.9800000000000002,
+        "verdict": "neutral",
+        "notes": "",
+        "count": 16
+      },
+      "est_sales": {
+        "avg_sharpe": 0.8225,
         "verdict": "neutral",
         "notes": "",
         "count": 4
+      },
+      "est_ebit": {
+        "avg_sharpe": 1.86,
+        "verdict": "prefer",
+        "notes": "",
+        "count": 3
       }
     },
     "denominator": {
       "close": {
-        "avg_sharpe": 0.925,
+        "avg_sharpe": 1.4066980609418285,
         "verdict": "neutral",
         "notes": "",
-        "count": 4
+        "count": 45
+      },
+      "anl4_total_rec": {
+        "avg_sharpe": 0.0,
+        "verdict": "neutral",
+        "notes": "",
+        "count": 9
+      },
+      "anl4_buy + anl4_under": {
+        "avg_sharpe": 0.0,
+        "verdict": "neutral",
+        "notes": "",
+        "count": 6
+      },
+      "equity": {
+        "avg_sharpe": 1.4094318181818182,
+        "verdict": "neutral",
+        "notes": "",
+        "count": 22
       }
     },
     "group": {
       "industry": {
+        "avg_sharpe": 1.724523160375261,
+        "verdict": "prefer",
+        "notes": "",
+        "count": 54
+      },
+      "subindustry": {
+        "avg_sharpe": 1.8799551640910295,
+        "verdict": "prefer",
+        "notes": "",
+        "count": 58
+      },
+      "sector": {
+        "avg_sharpe": 0.6025974025974027,
+        "verdict": "deprioritize",
+        "notes": "",
+        "count": 11
+      }
+    },
+    "tech_signal": {
+      "close/open": {
+        "avg_sharpe": 2.4715266485998195,
+        "verdict": "prefer",
+        "notes": "",
+        "count": 41
+      }
+    },
+    "fund_numerator": {
+      "operating_income": {
+        "avg_sharpe": 2.4715266485998195,
+        "verdict": "prefer",
+        "notes": "",
+        "count": 41
+      }
+    },
+    "fund_denominator": {
+      "equity": {
+        "avg_sharpe": 2.4715266485998195,
+        "verdict": "prefer",
+        "notes": "",
+        "count": 41
+      }
+    },
+    "weight_tech": {
+      "0.3": {
+        "avg_sharpe": 2.442984279918864,
+        "verdict": "prefer",
+        "notes": "",
+        "count": 34
+      },
+      "0.5": {
+        "avg_sharpe": 2.544285714285714,
+        "verdict": "prefer",
+        "notes": "",
+        "count": 7
+      }
+    },
+    "weight_fund": {
+      "0.5": {
+        "avg_sharpe": 2.508,
+        "verdict": "prefer",
+        "notes": "",
+        "count": 23
+      },
+      "0.7": {
+        "avg_sharpe": 2.4287896825396817,
+        "verdict": "prefer",
+        "notes": "",
+        "count": 18
+      }
+    },
+    "numerator": {
+      "anl4_buy": {
         "avg_sharpe": 0.0,
         "verdict": "neutral",
         "notes": "",
-        "count": 2
+        "count": 15
       },
-      "subindustry": {
-        "avg_sharpe": 1.85,
+      "operating_income": {
+        "avg_sharpe": 1.4094318181818182,
         "verdict": "neutral",
         "notes": "",
-        "count": 2
+        "count": 22
+      }
+    },
+    "description": {
+      "买入推荐占比 - 机构情绪代理": {
+        "avg_sharpe": 0.0,
+        "verdict": "neutral",
+        "notes": "",
+        "count": 9
+      },
+      "买入vs低配比率 - 机构多空分歧": {
+        "avg_sharpe": 0.0,
+        "verdict": "neutral",
+        "notes": "",
+        "count": 6
+      }
+    },
+    "price_signal": {
+      "close/open": {
+        "avg_sharpe": 1.4533333333333334,
+        "verdict": "neutral",
+        "notes": "",
+        "count": 15
+      },
+      "ts_mean(close/open, 5)": {
+        "avg_sharpe": 1.0366666666666668,
+        "verdict": "neutral",
+        "notes": "",
+        "count": 14
+      },
+      "ts_mean(close/open, 10)": {
+        "avg_sharpe": 0.82,
+        "verdict": "neutral",
+        "notes": "",
+        "count": 4
       }
     }
   },
   "_synced_alpha_ids": [],
   "version": 1,
-  "last_updated": "2026-06-24T17:56:35.784090+00:00"
+  "last_updated": "2026-06-25T05:06:36.299230+00:00"
 }

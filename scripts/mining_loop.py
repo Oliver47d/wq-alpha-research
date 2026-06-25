@@ -355,11 +355,29 @@ def run_breadth_round(
         print("[breadth] No candidates to simulate.")
         return round_result
 
-    # Fetch existing ACTIVE alphas' PnL for correlation FIRST (before any simulation)
-    active_alphas = {
-        aid: a for aid, a in db.get("alphas", {}).items() if a.get("status") == "ACTIVE"
-    }
-    logger.info("Fetching active PnLs for correlation active_count=%s", len(active_alphas))
+    # Fetch existing ACTIVE alphas' PnL for correlation FIRST (before any simulation).
+    # BRAIN's remote alpha list is authoritative; local alpha_db can be stale or
+    # missing alphas submitted outside this mining loop.
+    try:
+        remote_active = client.refresh_alpha_db_from_remote(db)
+        save_alpha_db(db)
+        active_alphas = {
+            a["id"]: db.get("alphas", {}).get(a["id"], a)
+            for a in remote_active
+            if a.get("id")
+        }
+        active_source = "remote"
+    except Exception as e:
+        logger.info("Remote active refresh failed; falling back to local DB active list error=%s", e)
+        active_alphas = {
+            aid: a for aid, a in db.get("alphas", {}).items() if a.get("status") == "ACTIVE"
+        }
+        active_source = "local_fallback"
+    logger.info(
+        "Fetching active PnLs for correlation active_count=%s active_source=%s",
+        len(active_alphas),
+        active_source,
+    )
     active_pnls: dict[str, list[float]] = {}
     for aid in active_alphas:
         pnl = client.fetch_pnl(aid)
@@ -396,6 +414,21 @@ def run_breadth_round(
         fitness = is_data.get("fitness")
         turnover = is_data.get("turnover")
         alpha_id = sim.get("alpha_id")
+        expression = r.get("expression", "")
+        template_id = r.get("template_id", "unknown")
+
+        # Persist every successfully simulated alpha as UNSUBMITTED so we never
+        # lose track of it (can retry submission later or inspect manually).
+        if alpha_id:
+            db["alphas"][alpha_id] = {
+                "expression": expression,
+                "status": "UNSUBMITTED",
+                "sharpe": sharpe,
+                "fitness": fitness,
+                "turnover": turnover,
+                "template_id": template_id,
+                "simulated_at": datetime.now(timezone.utc).isoformat(),
+            }
 
         # Compute correlation against existing ACTIVE alphas
         max_corr = None
@@ -403,7 +436,10 @@ def run_breadth_round(
             new_pnl = action_client.fetch_pnl(alpha_id)
             logger.info("Fetched new alpha PnL alpha_id=%s records=%s", alpha_id, len(new_pnl))
             if len(new_pnl) >= 50:
-                corr_list = compute_correlation(new_pnl, {"alphas": {aid: {"pnl": p} for aid, p in active_pnls.items()}})
+                corr_list = compute_correlation(
+                    new_pnl,
+                    {"alphas": {aid: {"status": "ACTIVE", "pnl": p} for aid, p in active_pnls.items()}},
+                )
                 if corr_list:
                     max_corr = max(abs(c.get("correlation", 0)) for c in corr_list)
             logger.info("Correlation computed alpha_id=%s max_corr=%s active_compare_count=%s", alpha_id, max_corr, len(active_pnls))
@@ -419,7 +455,7 @@ def run_breadth_round(
             fitness,
             turnover,
             max_corr,
-            r.get("template_id", "unknown"),
+            template_id,
             _expr_fingerprint(expression) if expression else None,
             len(expression),
         )
@@ -430,12 +466,12 @@ def run_breadth_round(
         if action == "SUBMIT":
             submit_record = {
                 "alpha_id": alpha_id,
-                "expression": r.get("expression", ""),
+                "expression": expression,
                 "sharpe": sharpe,
                 "fitness": fitness,
                 "turnover": turnover,
                 "max_corr": max_corr,
-                "template_id": r.get("template_id", "unknown"),
+                "template_id": template_id,
             }
 
             # Attempt submission
@@ -455,16 +491,13 @@ def run_breadth_round(
                 if submit_status == "ACTIVE":
                     round_result["submitted"].append({**submit_record, "submit_status": "ACTIVE"})
                     round_result["new_active"] += 1
-                    # Update DB
-                    db["alphas"][alpha_id] = {
-                        "expression": r.get("expression", ""),
-                        "status": "ACTIVE",
-                        "sharpe": sharpe,
-                        "fitness": fitness,
-                        "turnover": turnover,
-                        "template_id": r.get("template_id", "unknown"),
-                        "submitted_at": datetime.now(timezone.utc).isoformat(),
-                    }
+                    # Update DB — keep simulated_at, overwrite status
+                    db["alphas"][alpha_id].update(
+                        {
+                            "status": "ACTIVE",
+                            "submitted_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    )
                     # Add to active_pnls for subsequent correlation checks
                     new_pnl = action_client.fetch_pnl(alpha_id)
                     if len(new_pnl) >= 50:
@@ -473,15 +506,12 @@ def run_breadth_round(
                 elif submit_status == "PENDING":
                     round_result["submitted"].append({**submit_record, "submit_status": "PENDING"})
                     # Submission accepted but still under review — not a failure
-                    db["alphas"][alpha_id] = {
-                        "expression": r.get("expression", ""),
-                        "status": "PENDING",
-                        "sharpe": sharpe,
-                        "fitness": fitness,
-                        "turnover": turnover,
-                        "template_id": r.get("template_id", "unknown"),
-                        "submitted_at": datetime.now(timezone.utc).isoformat(),
-                    }
+                    db["alphas"][alpha_id].update(
+                        {
+                            "status": "PENDING",
+                            "submitted_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    )
                     print(f"  [SUBMIT-PENDING] {alpha_id} submitted, awaiting review")
                 else:
                     round_result["submit_failed"].append({
@@ -490,18 +520,25 @@ def run_breadth_round(
                         "status_code": submit_result.get("status_code"),
                         "self_correlation": submit_result.get("self_correlation"),
                     })
+                    # Keep UNSUBMITTED in DB and record why it failed so we can retry later
+                    db["alphas"][alpha_id]["submit_failed_at"] = datetime.now(timezone.utc).isoformat()
+                    db["alphas"][alpha_id]["submit_fail_reason"] = submit_status
                     print(f"  [SUBMIT-FAIL] {alpha_id}: {submit_status}")
 
         elif action == "OBSERVE":
             logger.info("Candidate observed alpha_id=%s sharpe=%s fitness=%s", alpha_id, sharpe, fitness)
+            if alpha_id:
+                db["alphas"][alpha_id]["status"] = "OBSERVE"
             round_result["observed"].append({
                 "alpha_id": alpha_id,
-                "expression": r.get("expression", ""),
+                "expression": expression,
                 "sharpe": sharpe,
                 "fitness": fitness,
             })
         else:
             logger.info("Candidate discarded alpha_id=%s sharpe=%s fitness=%s turnover=%s max_corr=%s", alpha_id, sharpe, fitness, turnover, max_corr)
+            if alpha_id:
+                db["alphas"][alpha_id]["status"] = "DISCARD"
             round_result["discarded"] += 1
 
         # Streaming mode can submit before the full batch finishes; persist after

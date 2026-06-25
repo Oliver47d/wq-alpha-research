@@ -561,6 +561,117 @@ class BrainClient:
     # ----------------------------------------------------------------- #
     # Metrics & PnL
     # ----------------------------------------------------------------- #
+    def list_user_alphas(self, user_id: str = "self", limit: int = 100) -> list[dict[str, Any]]:
+        """Fetch all user alphas from BRAIN with pagination."""
+        alphas: list[dict[str, Any]] = []
+        offset = 0
+        logger.info("Fetching remote alpha list user_id=%s limit=%s", user_id, limit)
+        while True:
+            resp = self.get_with_retry(
+                f"{API_BASE}/users/{user_id}/alphas",
+                params={"limit": limit, "offset": offset},
+            )
+            if resp.status_code != 200:
+                logger.info(
+                    "Fetch remote alpha list failed user_id=%s offset=%s status_code=%s body_len=%s body_hash=%s",
+                    user_id,
+                    offset,
+                    resp.status_code,
+                    len(resp.text or ""),
+                    _text_fingerprint(resp.text or ""),
+                )
+                raise RuntimeError(f"remote alpha list failed: status={resp.status_code} offset={offset}")
+            try:
+                data = resp.json()
+            except Exception as e:
+                logger.info(
+                    "Fetch remote alpha list JSON parse failed user_id=%s offset=%s error=%s body_len=%s body_hash=%s",
+                    user_id,
+                    offset,
+                    e,
+                    len(resp.text or ""),
+                    _text_fingerprint(resp.text or ""),
+                )
+                raise RuntimeError(f"remote alpha list JSON parse failed: offset={offset}") from e
+
+            batch = data.get("results", data.get("alphas", [])) if isinstance(data, dict) else []
+            if not isinstance(batch, list):
+                logger.info(
+                    "Fetch remote alpha list returned unexpected batch type user_id=%s offset=%s batch_type=%s",
+                    user_id,
+                    offset,
+                    type(batch).__name__,
+                )
+                raise RuntimeError(f"remote alpha list unexpected batch type: {type(batch).__name__}")
+            alphas.extend(a for a in batch if isinstance(a, dict))
+            logger.info("Fetched remote alpha page user_id=%s offset=%s count=%s", user_id, offset, len(batch))
+            if len(batch) < limit:
+                break
+            offset += limit
+
+        status_counts: dict[str, int] = {}
+        for alpha in alphas:
+            status = str(alpha.get("status", "UNKNOWN"))
+            status_counts[status] = status_counts.get(status, 0) + 1
+        logger.info("Remote alpha list complete total=%s status_counts=%s", len(alphas), status_counts)
+        return alphas
+
+    def refresh_alpha_db_from_remote(self, db: dict[str, Any]) -> list[dict[str, Any]]:
+        """Refresh local alpha DB statuses from the remote user alpha list.
+
+        Returns the remote ACTIVE alpha objects so callers can build correlation
+        baselines from the authoritative BRAIN state instead of stale local DB.
+        """
+        remote_alphas = self.list_user_alphas()
+        db.setdefault("alphas", {})
+        now = datetime.now(timezone.utc).isoformat()
+        updated = 0
+        created = 0
+        for alpha in remote_alphas:
+            alpha_id = alpha.get("id")
+            if not alpha_id:
+                continue
+            is_data = alpha.get("is", {}) if isinstance(alpha.get("is"), dict) else {}
+            existing = db["alphas"].setdefault(alpha_id, {})
+            if not existing:
+                created += 1
+            before = {
+                "status": existing.get("status"),
+                "sharpe": existing.get("sharpe"),
+                "fitness": existing.get("fitness"),
+                "turnover": existing.get("turnover"),
+            }
+            existing.update(
+                {
+                    "status": alpha.get("status"),
+                    "sharpe": is_data.get("sharpe", existing.get("sharpe")),
+                    "fitness": is_data.get("fitness", existing.get("fitness")),
+                    "turnover": is_data.get("turnover", existing.get("turnover")),
+                    "remote_refreshed_at": now,
+                }
+            )
+            if "expression" not in existing and alpha.get("regular"):
+                existing["expression"] = alpha.get("regular")
+            after = {
+                "status": existing.get("status"),
+                "sharpe": existing.get("sharpe"),
+                "fitness": existing.get("fitness"),
+                "turnover": existing.get("turnover"),
+            }
+            if before != after:
+                updated += 1
+
+        active = [a for a in remote_alphas if a.get("status") == "ACTIVE"]
+        logger.info(
+            "Refreshed alpha DB from remote remote_total=%s remote_active=%s created=%s updated=%s db_alpha_count=%s",
+            len(remote_alphas),
+            len(active),
+            created,
+            updated,
+            len(db.get("alphas", {})),
+        )
+        return active
+
     def get_alpha(self, alpha_id: str) -> dict:
         logger.info("Fetching alpha details alpha_id=%s", alpha_id)
         resp = self.get_with_retry(f"{API_BASE}/alphas/{alpha_id}")
@@ -586,20 +697,33 @@ class BrainClient:
         logger.debug("Fetch alpha details failed body alpha_id=%s body=%s", alpha_id, resp.text[:1000])
         return {}
 
-    def fetch_pnl(self, alpha_id: str) -> list[float]:
-        logger.info("Fetching alpha PnL alpha_id=%s", alpha_id)
-        try:
-            resp = self.get_with_retry(f"{API_BASE}/alphas/{alpha_id}/recordsets/pnl")
-        except Exception as e:
-            logger.info("Fetch alpha PnL exception alpha_id=%s error=%s", alpha_id, e)
-            return []
-        if resp.status_code != 200 or not resp.text.strip():
+    def fetch_pnl(self, alpha_id: str, retries: int = 3, retry_sleep: float = 2.0) -> list[float]:
+        logger.info("Fetching alpha PnL alpha_id=%s retries=%s", alpha_id, retries)
+        resp: requests.Response | None = None
+        for attempt in range(retries + 1):
+            try:
+                resp = self.get_with_retry(f"{API_BASE}/alphas/{alpha_id}/recordsets/pnl")
+            except Exception as e:
+                logger.info("Fetch alpha PnL exception alpha_id=%s attempt=%s/%s error=%s", alpha_id, attempt + 1, retries + 1, e)
+                if attempt >= retries:
+                    return []
+                time.sleep(retry_sleep * (attempt + 1))
+                continue
+            if resp.status_code == 200 and resp.text.strip():
+                break
             logger.info(
-                "Fetch alpha PnL empty alpha_id=%s status_code=%s text_chars=%s",
+                "Fetch alpha PnL empty/non-200 alpha_id=%s attempt=%s/%s status_code=%s text_chars=%s",
                 alpha_id,
+                attempt + 1,
+                retries + 1,
                 resp.status_code,
                 len(resp.text or ""),
             )
+            if attempt >= retries:
+                return []
+            time.sleep(retry_sleep * (attempt + 1))
+
+        if resp is None:
             return []
         try:
             data = resp.json()
@@ -718,6 +842,9 @@ def compute_correlation(
         if len(new_ret) != len(old_ret):
             continue
         corr = float(np.corrcoef(new_ret, old_ret)[0, 1])
+        if np.isnan(corr):
+            logger.info("Skipping NaN correlation old_alpha_id=%s records=%s", old_id, len(old_ret))
+            continue
         results.append({"alpha_id": old_id, "correlation": corr, "sharpe": old.get("sharpe"), "fitness": old.get("fitness")})
     results.sort(key=lambda x: abs(x["correlation"]), reverse=True)
     return results
