@@ -1,0 +1,38 @@
+{
+  "template_id": "price_range_volume_acceleration",
+  "description": "振幅-成交量加速度因子：用价格振幅与成交量的交互项，捕获趋势从积蓄到爆发的转换点",
+  "skeleton": "group_rank({signal}, {group})",
+  "field_pairs": [
+    {
+      "name": "signal",
+      "numerator": "ts_delta(ts_mean(volume, {window}) * ts_std_dev(returns, {window}), {accel_window})",
+      "denominator": "1"
+    }
+  ],
+  "param_ranges": {
+    "window": [10, 20, 30],
+    "accel_window": [5, 10],
+    "group": ["industry", "subindustry"],
+    "decay": [0, 4, 8],
+    "truncation": [0.08]
+  },
+  "default_settings": {
+    "instrumentType": "EQUITY",
+    "region": "USA",
+    "universe": "TOP3000",
+    "delay": 1,
+    "decay": 4,
+    "neutralization": "SUBINDUSTRY",
+    "truncation": 0.08,
+    "pasteurization": "ON",
+    "nanHandling": "ON",
+    "unitHandling": "VERIFY"
+  },
+  "hypothesis": "量价齐升（高成交量 + 高振幅）是趋势爆发信号；量缩振幅收窄是趋势结束信号。ts_delta捕获的是成交量×波动率的变化加速度（资金从观望到介入的临界点），这是"量"与"价"融合的最高级形态。",
+  "source": ""量"与"价"的结合",
+  "expected_correlation": "低相关于所有现有模板——首次引入量×波动率乘积的加速度概念，完全新的信息维度",
+  "failure_risks": {
+    "LOW_FITNESS": "ts_delta(ts_std_dev(returns,window), accel_window)中双重时序操作可能产生NaN，nanHandling=ON可缓解",
+    "SIM_ERROR": "ts_std_dev(returns,window)需确认returns的event类型；ts_delta第二个参数为整数窗口"
+  }
+}

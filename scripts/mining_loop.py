@@ -1160,6 +1160,12 @@ def run_mining_loop(
         depth_response_status,
     )
 
+    # If a pending request existed in a previous run, we have new templates now.
+    # Reset consecutive_no_active so breadth runs instead of immediately pivoting to depth again.
+    if depth_response_status == "consumed":
+        state["consecutive_no_active"] = 0
+        logger.info("Depth response consumed at startup; reset consecutive_no_active=0")
+
     if depth_backend == "handoff" and depth_response_status == "blocked":
         logger.info("Mining loop stopped: blocked handoff response response_path=%s", DEPTH_RESPONSE_PATH)
         print("\n[depth] A depth_response.json file exists but could not be safely consumed.")
@@ -1168,12 +1174,35 @@ def run_mining_loop(
         return
 
     if depth_backend == "handoff" and DEPTH_REQUEST_PATH.exists() and not DEPTH_RESPONSE_PATH.exists():
-        logger.info("Mining loop stopped: pending handoff request request_path=%s", DEPTH_REQUEST_PATH)
-        print("\n[depth] Existing handoff request is pending.")
+        logger.info("Mining loop waiting: pending handoff request request_path=%s", DEPTH_REQUEST_PATH)
+        print("\n[depth] Existing handoff request is pending. Waiting for response...")
         print(f"  Request:  {DEPTH_REQUEST_PATH}")
         print(f"  Response: {DEPTH_RESPONSE_PATH}")
-        print("  Ask the outer Agent/subagent to process the request, then rerun mining_loop.py.")
-        return
+        max_wait = 1800
+        check_interval = 5
+        waited = 0
+        consumed = False
+        while waited < max_wait:
+            if DEPTH_RESPONSE_PATH.exists():
+                status = consume_depth_response(reg)
+                if status == "consumed":
+                    logger.info("Pending handoff response consumed on startup")
+                    print("[depth] Response consumed. Resuming...")
+                    # Reset so next round actually runs breadth with the new templates.
+                    state["consecutive_no_active"] = 0
+                    consumed = True
+                    break
+                elif status == "blocked":
+                    logger.info("Pending handoff response blocked, retrying in %ss", check_interval)
+                    print(f"[depth] Response blocked, retrying in {check_interval}s...")
+                else:
+                    logger.info("Pending handoff response absent, waiting %ss", check_interval)
+            time.sleep(check_interval)
+            waited += check_interval
+        if not consumed:
+            logger.info("Pending handoff timeout after %ss", max_wait)
+            print("[depth] Timeout waiting for pending response. Exiting.")
+            return
 
     agent_failures = 0
 
@@ -1204,16 +1233,35 @@ def run_mining_loop(
         print(f"{'─' * 70}")
 
         # ── BREADTH PHASE ──
-        print("\n[breadth] Building candidates from templates...")
-        candidates = build_candidates(lessons)
-        has_candidates = len(candidates) > 0
-        logger.info("Round candidates built round=%s candidate_count=%s", round_num, len(candidates))
+        # If a depth request is already pending (from a previous round), skip
+        # breadth entirely and go straight to the wait loop so we don't waste
+        # API calls while waiting for Agent to process the request.
+        pending = DEPTH_REQUEST_PATH.exists()
+        if pending:
+            logger.info("Skipping breadth: pending depth request exists request_path=%s", DEPTH_REQUEST_PATH)
+            print("\n[breadth] Skipping: pending depth request exists.")
+        # Skip breadth when we have already failed to produce new ACTIVE alphas
+        # for 2+ consecutive rounds; pivot straight to depth research instead.
+        if state.get("consecutive_no_active", 0) >= 2:
+            logger.info("Skipping breadth: consecutive_no_active >= 2, pivoting to depth")
+            print("\n[breadth] Skipping breadth phase (consecutive_no_active >= 2).")
+            has_candidates = False
+            round_data: dict[str, Any] = {
+                "round": round_num,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "candidate_count": 0,
+            }
+        else:
+            print("\n[breadth] Building candidates from templates...")
+            candidates = build_candidates(lessons)
+            has_candidates = len(candidates) > 0
+            logger.info("Round candidates built round=%s candidate_count=%s", round_num, len(candidates))
 
-        round_data: dict[str, Any] = {
-            "round": round_num,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "candidate_count": len(candidates),
-        }
+            round_data = {
+                "round": round_num,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "candidate_count": len(candidates),
+            }
 
         if has_candidates and not dry_run:
             # Run breadth round
@@ -1269,18 +1317,14 @@ def run_mining_loop(
             print("\n[breadth] No candidates generated.")
             round_data["candidate_count"] = 0
 
-        # ── CHECK TERMINATION ──
-        should_stop, reason = should_terminate(state, reg, has_candidates)
-        if should_stop:
-            logger.info("Round terminating round=%s reason=%s", round_num, reason)
-            print(f"\n[terminate] {reason}")
-            round_data["termination_reason"] = reason
-            state["rounds"].append(round_data)
-            break
-
         # ── DEPTH PHASE ──
-        # Only trigger depth if candidate pool is empty (templates exhausted)
-        if not has_candidates:
+        # Trigger depth when templates are exhausted OR when existing templates
+        # have failed to produce new ACTIVE alphas for 2+ consecutive rounds.
+        # Guard: never generate a new depth request if one is already pending
+        # (a previous round generated request but response hasn't arrived yet).
+        pending = DEPTH_REQUEST_PATH.exists()
+        should_depth = (not has_candidates or state.get("consecutive_no_active", 0) >= 2) and not pending
+        if should_depth:
             next_paper = get_next_paper(reg)
             if next_paper:
                 logger.info(
@@ -1336,8 +1380,35 @@ def run_mining_loop(
                     print(f"  Source:   {request['source_id']} — {request['paper']['title']}")
                     print(f"  Request:  {DEPTH_REQUEST_PATH}")
                     print(f"  Response: {DEPTH_RESPONSE_PATH}")
-                    print("  Process this request with the outer Agent/subagent, then rerun mining_loop.py.")
-                    return
+                    print("  Waiting for depth_response.json (ask the Agent to process it)...")
+
+                    # Wait for response instead of exiting so the loop can continue automatically.
+                    max_wait = 1800  # 30 minutes
+                    check_interval = 5
+                    waited = 0
+                    consumed = False
+                    while waited < max_wait:
+                        if DEPTH_RESPONSE_PATH.exists():
+                            status = consume_depth_response(reg)
+                            if status == "consumed":
+                                logger.info("Depth response consumed automatically round=%s", round_num)
+                                print("[depth] Response consumed. New templates added. Continuing...")
+                                # Reset so the next iteration runs breadth with the new templates.
+                                state["consecutive_no_active"] = 0
+                                consumed = True
+                                break
+                            elif status == "blocked":
+                                logger.info("Depth response blocked, retrying in %ss", check_interval)
+                                print(f"[depth] Response blocked (may need fix), retrying in {check_interval}s...")
+                            else:
+                                logger.info("Depth response absent, waiting %ss", check_interval)
+                        time.sleep(check_interval)
+                        waited += check_interval
+
+                    if not consumed:
+                        logger.info("Depth handoff timeout after %ss", max_wait)
+                        print("[depth] Timeout waiting for response. Exiting.")
+                        return
 
                 if depth_backend == "none":
                     logger.info("Depth backend disabled; loop exits round=%s source_id=%s", round_num, next_paper)
@@ -1384,6 +1455,15 @@ def run_mining_loop(
                 round_data["termination_reason"] = "No unread papers and empty candidate pool"
                 state["rounds"].append(round_data)
                 break
+
+        # ── CHECK TERMINATION ──
+        should_stop, reason = should_terminate(state, reg, has_candidates)
+        if should_stop:
+            logger.info("Round terminating round=%s reason=%s", round_num, reason)
+            print(f"\n[terminate] {reason}")
+            round_data["termination_reason"] = reason
+            state["rounds"].append(round_data)
+            break
 
         # Save state after each round
         state["rounds"].append(round_data)

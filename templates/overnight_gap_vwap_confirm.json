@@ -1,0 +1,42 @@
+{
+  "template_id": "overnight_gap_vwap_confirm",
+  "description": "跳空-VWAP确认因子：融合隔夜跳空强度与VWAP日内确认，过滤假跳空信号——跳空须有机构资金跟进才有效",
+  "skeleton": "group_rank(rank({gap}) * rank({vwap_conf}), {group})",
+  "field_pairs": [
+    {
+      "name": "gap",
+      "numerator": "ts_mean(open - ts_delay(close, 1), {gap_window})",
+      "denominator": "ts_delay(close, 1)"
+    },
+    {
+      "name": "vwap_conf",
+      "numerator": "vwap - open",
+      "denominator": "open"
+    }
+  ],
+  "param_ranges": {
+    "gap_window": [3, 5, 10],
+    "group": ["industry", "subindustry"],
+    "decay": [0, 4, 8],
+    "truncation": [0.08]
+  },
+  "default_settings": {
+    "instrumentType": "EQUITY",
+    "region": "USA",
+    "universe": "TOP3000",
+    "delay": 1,
+    "decay": 4,
+    "neutralization": "SUBINDUSTRY",
+    "truncation": 0.08,
+    "pasteurization": "ON",
+    "nanHandling": "ON",
+    "unitHandling": "VERIFY"
+  },
+  "hypothesis": "隔夜跳空（open vs prev close）反映盘前信息；VWAP相对open的变化反映日内机构是否确认该方向。两者同向放大信号——跳空但无VWAP跟进则信号无效。这是Level2订单流与价量信号的融合。",
+  "source": "Level2行情选股因子初探",
+  "expected_correlation": "低相关于所有现有模板——首次使用vwap_open关系与隔夜gap的乘积信号，完全新的信息维度",
+  "failure_risks": {
+    "LOW_FITNESS": "open相关表达式换手可能偏高；decay=8可缓解",
+    "SIM_ERROR": "open和ts_delay(close,1)均需验证event类型；跳空方向使用ts_mean平滑"
+  }
+}

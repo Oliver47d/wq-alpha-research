@@ -70,6 +70,9 @@ class FieldValidator:
 
     def validate_expression(self, expr: str) -> bool:
         """Extract field-like tokens from expression and validate them."""
+        # Remove template placeholders (e.g. {numerator}, {vwap_dev}) before validation
+        # so we only validate actual field names used in the final FASTEXPR.
+        expr = re.sub(r'\{[^}]+\}', '', expr)
         # Skip operators and functions, extract potential field names
         # Field names are typically lowercase with underscores and digits
         tokens = re.findall(r'[a-z][a-z0-9_]+', expr.lower())

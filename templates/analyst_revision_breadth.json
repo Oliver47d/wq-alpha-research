@@ -1,0 +1,40 @@
+{
+  "template_id": "analyst_revision_breadth",
+  "description": "分析师预期广度因子：用预测值变化的方向计数（向上vs向下）而非绝对值，捕获分析师共识转向的领先信号",
+  "skeleton": "group_rank({signal}, {group})",
+  "field_pairs": [
+    {
+      "name": "signal",
+      "numerator": "ts_count({est_up}, {window}) - ts_count({est_down}, {window})",
+      "denominator": "1"
+    }
+  ],
+  "param_ranges": {
+    "window": [20, 60, 126],
+    "est_up": "ts_delta({est_field}, {window})",
+    "est_down": "-ts_delta({est_field}, {window})",
+    "est_field": ["est_eps", "est_fcf"],
+    "group": ["industry", "subindustry"],
+    "decay": [0, 4],
+    "truncation": [0.08]
+  },
+  "default_settings": {
+    "instrumentType": "EQUITY",
+    "region": "USA",
+    "universe": "TOP3000",
+    "delay": 1,
+    "decay": 0,
+    "neutralization": "SUBINDUSTRY",
+    "truncation": 0.08,
+    "pasteurization": "ON",
+    "nanHandling": "ON",
+    "unitHandling": "VERIFY"
+  },
+  "hypothesis": "est_eps等分析师预期字段是当前估计值而非事件字段；ts_count向上vs向下变化次数的差值，反映分析师共识的趋势广度；group_rank消除行业beta。",
+  "source": "因子大讲坛",
+  "expected_correlation": "低相关于analyst_estimate_trend——后者用预测绝对值水平，前者用方向变化计数；经济含义完全不同",
+  "failure_risks": {
+    "SIM_ERROR": "ts_count需要condition表达式；ts_delta(est_field, window)需确认est_eps/est_fcf是realtime类型而非event类型",
+    "LOW_SHARPE": "ts_count差异可能信号较弱；确保window>=20以捕捉足够的变化"
+  }
+}

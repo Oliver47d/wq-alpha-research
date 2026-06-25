@@ -1,0 +1,38 @@
+{
+  "template_id": "market_volatility_regime",
+  "description": "市场波动率状态因子：用个股波动率相对市场均值的偏离度，捕获不同波动率环境下的Alpha分布差异",
+  "skeleton": "group_rank({signal}, {group})",
+  "field_pairs": [
+    {
+      "name": "signal",
+      "numerator": "ts_std_dev(returns, {window}) / ts_mean(ts_std_dev(returns, {window}), {market_window}) - 1",
+      "denominator": "1"
+    }
+  ],
+  "param_ranges": {
+    "window": [10, 20, 30],
+    "market_window": [20, 30, 60],
+    "group": ["industry", "subindustry"],
+    "decay": [0, 4, 12],
+    "truncation": [0.08]
+  },
+  "default_settings": {
+    "instrumentType": "EQUITY",
+    "region": "USA",
+    "universe": "TOP3000",
+    "delay": 1,
+    "decay": 4,
+    "neutralization": "SUBINDUSTRY",
+    "truncation": 0.08,
+    "pasteurization": "ON",
+    "nanHandling": "ON",
+    "unitHandling": "VERIFY"
+  },
+  "hypothesis": "个股波动率相对市场基准的偏离（高波动股票vs低波动股票）反映风险暴露程度；BRAIN研究中低波动因子有效（Low Volatility Anomaly）；但此处用相对偏离而非绝对低波动，捕获波动率风险溢价。",
+  "source": "因子大讲坛",
+  "expected_correlation": "低相关于所有现有模板——首次用ts_mean(ts_std_dev())嵌套计算市场基准，是全新信号维度",
+  "failure_risks": {
+    "SIM_ERROR": "嵌套ts_mean(ts_std_dev(returns,window), market_window)可能产生复杂NaN；确保nanHandling=ON",
+    "LOW_FITNESS": "波动率倒数在高波动期可能极端，truncation=0.08限制"
+  }
+}

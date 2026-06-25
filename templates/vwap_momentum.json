@@ -1,0 +1,44 @@
+{
+  "template_id": "vwap_momentum",
+  "description": "VWAP动量因子：用成交量加权均价的时序变化率替代传统收盘价动量，捕获更稳健的机构驱动趋势",
+  "skeleton": "group_rank(ts_rank({vwap_chg} / ({vwap_vol} + 1e-6), {window}), {group})",
+  "field_pairs": [
+    {
+      "name": "vwap_chg",
+      "numerator": "vwap - ts_delay(vwap, {chg_window})",
+      "denominator": "vwap"
+    },
+    {
+      "name": "vwap_vol",
+      "numerator": "ts_std_dev(vwap - ts_delay(vwap, 1), {vol_window})",
+      "denominator": "1"
+    }
+  ],
+  "param_ranges": {
+    "chg_window": [5, 10, 20],
+    "vol_window": [5, 10, 20],
+    "window": [5, 10, 20],
+    "group": ["industry", "subindustry"],
+    "decay": [0, 4, 12],
+    "truncation": [0.08]
+  },
+  "default_settings": {
+    "instrumentType": "EQUITY",
+    "region": "USA",
+    "universe": "TOP3000",
+    "delay": 1,
+    "decay": 4,
+    "neutralization": "SUBINDUSTRY",
+    "truncation": 0.08,
+    "pasteurization": "ON",
+    "nanHandling": "ON",
+    "unitHandling": "VERIFY"
+  },
+  "hypothesis": "VWAP变化率比收盘价动量更能反映机构资金的真实流向；波动率标准化后的动量能过滤高噪声股票；Group内rank消除行业beta影响。",
+  "source": "Level2行情选股因子初探",
+  "expected_correlation": "低相关于vwap_reversion（一个是均值回归，一个是动量），也低相关于所有现有模板",
+  "failure_risks": {
+    "LOW_SHARPE": "波动率标准化可能放大低流动性股票的噪声；确保vwap_vol窗口 >= chg_window",
+    "SIM_ERROR": "ts_std_dev(vwap - ts_delay(vwap, 1), window)中ts_delay(vwap,1)需确认event类型"
+  }
+}

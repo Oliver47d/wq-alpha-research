@@ -1,0 +1,42 @@
+{
+  "template_id": "vwap_reversion",
+  "description": "VWAP均值回归因子：用收盘价与成交量加权均价的偏离度捕获订单簿不平衡，等效于A股Level2订单流压力信号",
+  "skeleton": "group_rank(rank({vwap_dev} / {vwap_std} + 1e-6), {group})",
+  "field_pairs": [
+    {
+      "name": "vwap_dev",
+      "numerator": "close - vwap",
+      "denominator": "vwap"
+    },
+    {
+      "name": "vwap_std",
+      "numerator": "ts_std_dev(close - vwap, {window})",
+      "denominator": "1"
+    }
+  ],
+  "param_ranges": {
+    "window": [5, 10, 20],
+    "group": ["industry", "subindustry"],
+    "decay": [0, 4, 8],
+    "truncation": [0.08]
+  },
+  "default_settings": {
+    "instrumentType": "EQUITY",
+    "region": "USA",
+    "universe": "TOP3000",
+    "delay": 1,
+    "decay": 4,
+    "neutralization": "SUBINDUSTRY",
+    "truncation": 0.08,
+    "pasteurization": "ON",
+    "nanHandling": "ON",
+    "unitHandling": "VERIFY"
+  },
+  "hypothesis": "close > vwap 表示当日收盘价高于成交量加权均价——大量主动买盘推升价格（Level2买单队列）；该偏离度均值回归。ts_std_dev标准化后可跨市场比较。",
+  "source": "Level2行情选股因子初探",
+  "expected_correlation": "低相关于所有现有模板——vwap是全新的信号维度，现有模板均基于纯价格或基本面数据",
+  "failure_risks": {
+    "LOW_FITNESS": "close-vwap偏离度信号较弱，+1e-6防止除零，标准化后再group_rank",
+    "SIM_ERROR": "vwap存在但需验证event类型；若为event则用ts_mean(close,1)近似"
+  }
+}

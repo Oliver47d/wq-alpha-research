@@ -1,0 +1,45 @@
+{
+  "template_id": "trading_activity_volatility",
+  "description": "交易活动波动率因子：用成交量自身的波动率（ts_std_dev）除以均值，捕获交易活跃度的稳定性程度——高波动表示交易行为不稳定，可能蕴含更多信息或噪声",
+  "skeleton": "group_rank({tav}, {group})",
+  "field_pairs": [
+    {
+      "name": "tav",
+      "numerator": "ts_std_dev(volume, {vol_window}) / (ts_mean(volume, {mean_window}) + 1e-6)",
+      "denominator": "1"
+    },
+    {
+      "name": "tav_relative",
+      "numerator": "ts_std_dev(volume, {vol_window}) / (ts_mean(volume, {mean_window}) + 1e-6) - ts_mean(ts_std_dev(volume, {vol_window}) / (ts_mean(volume, {mean_window}) + 1e-6), {market_window})",
+      "denominator": "1"
+    }
+  ],
+  "param_ranges": {
+    "vol_window": [10, 20, 30],
+    "mean_window": [20, 60],
+    "market_window": [20, 60],
+    "group": ["industry", "subindustry"],
+    "decay": [0, 4, 12],
+    "truncation": [0.08]
+  },
+  "default_settings": {
+    "instrumentType": "EQUITY",
+    "region": "USA",
+    "universe": "TOP3000",
+    "delay": 1,
+    "decay": 4,
+    "neutralization": "SUBINDUSTRY",
+    "truncation": 0.08,
+    "pasteurization": "ON",
+    "nanHandling": "ON",
+    "unitHandling": "VERIFY"
+  },
+  "hypothesis": "交易行为的波动性（成交量变异系数）是独立于收益率波动率的另一风险维度。高交易波动股票蕴含更多信息不对称或投资者分歧，要求更高收益补偿。",
+  "source": "交易行为波动与资产定价研究",
+  "expected_correlation": "低相关于relative_volume_strength——后者用volume绝对水平/行业均值比，前者用volume自身的波动系数；信号经济含义完全不同",
+  "failure_risks": {
+    "LOW_SHARPE": "vol_window太短可能导致噪声；mean_window需>=vol_window保证稳定性",
+    "SIM_ERROR": "ts_std_dev(volume)需确认volume为非event类型；+1e-6防除零",
+    "LOW_FITNESS": "波动率比值在高交易量票可能极端，truncation=0.08限制"
+  }
+}

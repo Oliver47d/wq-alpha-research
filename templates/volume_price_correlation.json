@@ -1,0 +1,37 @@
+{
+  "template_id": "volume_price_correlation",
+  "description": "量价相关性因子：用收益率与成交量的时序相关性捕获趋势持续性——价涨量增趋势强，价涨量缩趋势弱",
+  "skeleton": "group_rank({corr_signal}, {group})",
+  "field_pairs": [
+    {
+      "name": "corr",
+      "numerator": "ts_corr(returns, volume, {window})",
+      "denominator": "1"
+    }
+  ],
+  "param_ranges": {
+    "window": [10, 20, 30],
+    "group": ["industry", "subindustry"],
+    "decay": [0, 4, 12],
+    "truncation": [0.08]
+  },
+  "default_settings": {
+    "instrumentType": "EQUITY",
+    "region": "USA",
+    "universe": "TOP3000",
+    "delay": 1,
+    "decay": 4,
+    "neutralization": "SUBINDUSTRY",
+    "truncation": 0.08,
+    "pasteurization": "ON",
+    "nanHandling": "ON",
+    "unitHandling": "VERIFY"
+  },
+  "hypothesis": "收益率与成交量正相关表示趋势有资金支撑（健康上涨）；负相关或零相关表示无趋势或假突破。ts_corr是"量"与"价"结合的核心表达。",
+  "source": ""量"与"价"的结合",
+  "expected_correlation": "低相关于所有现有模板——ts_corr(returns, volume)是全新的信号维度",
+  "failure_risks": {
+    "LOW_SHARPE": "ts_corr信号较弱，可配合ts_mean做平滑",
+    "SIM_ERROR": "ts_corr参数为(ts_a, ts_b, window)，需确认volume和returns的event类型"
+  }
+}

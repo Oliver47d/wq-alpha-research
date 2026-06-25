@@ -1,0 +1,37 @@
+{
+  "template_id": "relative_volume_strength",
+  "description": "相对成交量强度因子：用个股成交量相对行业平均的偏离度，捕获资金流向的行业轮动信号",
+  "skeleton": "group_rank({rvs_signal}, {group})",
+  "field_pairs": [
+    {
+      "name": "rvs",
+      "numerator": "ts_mean(volume, {window}) / group_mean(ts_mean(volume, {window}), {group}) - 1",
+      "denominator": "1"
+    }
+  ],
+  "param_ranges": {
+    "window": [5, 10, 20],
+    "group": ["industry", "subindustry"],
+    "decay": [0, 4, 8],
+    "truncation": [0.08]
+  },
+  "default_settings": {
+    "instrumentType": "EQUITY",
+    "region": "USA",
+    "universe": "TOP3000",
+    "delay": 1,
+    "decay": 4,
+    "neutralization": "SUBINDUSTRY",
+    "truncation": 0.08,
+    "pasteurization": "ON",
+    "nanHandling": "ON",
+    "unitHandling": "VERIFY"
+  },
+  "hypothesis": "个股成交量相对行业平均的异常放大/萎缩，反映资金对该股票的关注度变化。group_mean做组内标准化后可跨行业比较。资金轮动时，成交量异常放大往往是领先信号。",
+  "source": ""量"与"价"的结合",
+  "expected_correlation": "低相关于volume_price_divergence_momentum（后者用成交量变化率的符号，此模板用相对行业均值的偏离幅度）",
+  "failure_risks": {
+    "LOW_FITNESS": "相对成交量信号在低流动性股票可能不稳定，decay=4可缓解",
+    "SIM_ERROR": "group_mean需确认参数为(ts_a, group_field)，volume需验证非event类型"
+  }
+}

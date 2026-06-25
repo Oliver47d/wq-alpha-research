@@ -1,0 +1,43 @@
+{
+  "template_id": "amihud_illiquidity_proxy",
+  "description": "Amihud流动性代理因子：借鉴Amihud(2002)非流动性指标，用|returns|/volume捕获单位交易量的价格冲击。高价格冲击意味着低流动性，获取流动性溢价补偿",
+  "skeleton": "group_rank({illiq}, {group})",
+  "field_pairs": [
+    {
+      "name": "illiq",
+      "numerator": "ts_mean((returns > 0) * returns - (returns < 0) * returns, {window}) / (volume + 1e-6)",
+      "denominator": "1"
+    },
+    {
+      "name": "illiq_adv_scaled",
+      "numerator": "ts_mean((returns > 0) * returns - (returns < 0) * returns, {window}) / (volume + 1e-6) * (adv20 / cap + 1e-6)",
+      "denominator": "1"
+    }
+  ],
+  "param_ranges": {
+    "window": [20, 60, 120],
+    "group": ["industry", "subindustry"],
+    "decay": [0, 4, 8],
+    "truncation": [0.08]
+  },
+  "default_settings": {
+    "instrumentType": "EQUITY",
+    "region": "USA",
+    "universe": "TOP3000",
+    "delay": 1,
+    "decay": 4,
+    "neutralization": "SUBINDUSTRY",
+    "truncation": 0.08,
+    "pasteurization": "ON",
+    "nanHandling": "ON",
+    "unitHandling": "VERIFY"
+  },
+  "hypothesis": "Amihud(2002)证明|returns|/volume代表每单位交易量引起的价格波动（价格冲击），是流动性逆指标。高价格冲击股票要求更高收益作为流动性风险补偿；BRAIN研究中该类流动性因子在A股有效。",
+  "source": "Amihud(2002)流动性因子研究",
+  "expected_correlation": "低相关于所有现有模板——首次使用abs(returns)/volume组合，是经典的流动性/价格冲击信号，与现有价量模板完全不同",
+  "failure_risks": {
+    "LOW_SHARPE": "低流动性股票可能有极端值，truncation=0.08限制；ts_mean平滑窗口需足够长(>=60)",
+    "SIM_ERROR": "abs(returns)需确认returns为event类型；volume可能为shares单位，注意scalability；adv20/cap做规模调整",
+    "DIV_ZERO": "volume+1e-6防止除零"
+  }
+}

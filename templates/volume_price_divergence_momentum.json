@@ -1,0 +1,43 @@
+{
+  "template_id": "volume_price_divergence_momentum",
+  "description": "量价背离动量因子：做多价涨量缩/做空价跌量放，捕获机构资金流向与价格动量的背离信号",
+  "skeleton": "rank({price_signal} * ({volume_signal}))",
+  "field_pairs": [
+    {
+      "name": "price",
+      "numerator": "ts_mean(close/open, {price_window}) - 1",
+      "denominator": "close"
+    },
+    {
+      "name": "volume",
+      "numerator": "ts_mean(volume, {volume_window}) - ts_mean(ts_delay(volume, {volume_window}), {volume_window})",
+      "denominator": "ts_mean(ts_delay(volume, {volume_window}), {volume_window})"
+    }
+  ],
+  "param_ranges": {
+    "price_window": [5, 10, 20],
+    "volume_window": [10, 20, 30],
+    "neutralization": ["INDUSTRY", "SUBINDUSTRY"],
+    "decay": [0, 4, 12],
+    "truncation": [0.08]
+  },
+  "default_settings": {
+    "instrumentType": "EQUITY",
+    "region": "USA",
+    "universe": "TOP3000",
+    "delay": 1,
+    "decay": 4,
+    "neutralization": "SUBINDUSTRY",
+    "truncation": 0.08,
+    "pasteurization": "ON",
+    "nanHandling": "ON",
+    "unitHandling": "VERIFY"
+  },
+  "hypothesis": "价涨量缩（资金流入未体现在交易量）与价跌量放（抛压重）代表不同的价格动量持续性；量价背离信号可预测短期反转。",
+  "source": "A股市场的动量反转效应研究",
+  "expected_correlation": "低相关于overnight_reversal和multi_period_reversal——量价背离与纯价格反转使用不同信息源",
+  "failure_risks": {
+    "LOW_FITNESS": "量价背离信号较弱，确保price_window和volume_window对齐同一周期",
+    "SIM_ERROR": "volume需确认在USA TOP3000中存在且非event类型"
+  }
+}

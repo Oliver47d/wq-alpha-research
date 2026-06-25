@@ -1,0 +1,37 @@
+{
+  "template_id": "sector_relative_momentum",
+  "description": "行业相对动量因子：用个股动量相对行业均值的超额收益，捕获选股Alpha而非Beta",
+  "skeleton": "group_rank({signal}, {group})",
+  "field_pairs": [
+    {
+      "name": "signal",
+      "numerator": "ts_mean(returns, {window}) / group_mean(ts_mean(returns, {window}), {group}) - 1",
+      "denominator": "1"
+    }
+  ],
+  "param_ranges": {
+    "window": [10, 20, 30],
+    "group": ["industry", "subindustry"],
+    "decay": [0, 4, 12],
+    "truncation": [0.08]
+  },
+  "default_settings": {
+    "instrumentType": "EQUITY",
+    "region": "USA",
+    "universe": "TOP3000",
+    "delay": 1,
+    "decay": 4,
+    "neutralization": "SUBINDUSTRY",
+    "truncation": 0.08,
+    "pasteurization": "ON",
+    "nanHandling": "ON",
+    "unitHandling": "VERIFY"
+  },
+  "hypothesis": "个股动量/行业动量-1反映剔除行业Beta后的纯选股Alpha；group_mean是BRAIN内置分组标准化函数；20日窗口平衡信号稳定性与反应速度。",
+  "source": "因子大讲坛",
+  "expected_correlation": "低相关于所有现有模板——首次引入group_mean(ts_mean(returns))的相对化操作，是纯选股Alpha而非绝对动量",
+  "failure_risks": {
+    "SIM_ERROR": "group_mean(ts_mean(returns, window), group)需确认returns为realtime类型，group参数为industry/subindustry",
+    "LOW_FITNESS": "相对动量信号在高Beta市场可能趋同；确保window>=10"
+  }
+}

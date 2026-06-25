@@ -1,0 +1,49 @@
+{
+  "template_id": "multi_period_reversal",
+  "description": "多周期叠加反转因子：融合 5/10/20 日收盘价收益反转，捕获A股短期惯性-反转切换特性",
+  "skeleton": "rank({w5_signal}) + rank({w10_signal}) + rank({w20_signal})",
+  "field_pairs": [
+    {
+      "name": "w5",
+      "numerator": "close - ts_delay(close, 5)",
+      "denominator": "close"
+    },
+    {
+      "name": "w10",
+      "numerator": "close - ts_delay(close, 10)",
+      "denominator": "close"
+    },
+    {
+      "name": "w20",
+      "numerator": "close - ts_delay(close, 20)",
+      "denominator": "close"
+    }
+  ],
+  "param_ranges": {
+    "window_5": [3, 5, 7],
+    "window_10": [8, 10, 14],
+    "window_20": [15, 20, 30],
+    "neutralization": ["INDUSTRY", "SUBINDUSTRY"],
+    "decay": [0, 4, 8],
+    "truncation": [0.08]
+  },
+  "default_settings": {
+    "instrumentType": "EQUITY",
+    "region": "USA",
+    "universe": "TOP3000",
+    "delay": 1,
+    "decay": 0,
+    "neutralization": "SUBINDUSTRY",
+    "truncation": 0.08,
+    "pasteurization": "ON",
+    "nanHandling": "ON",
+    "unitHandling": "VERIFY"
+  },
+  "hypothesis": "股价短期反转在5-20日窗口内最为显著；多周期叠加可过滤噪声、放大稳健反转信号；SUBINDUSTRY中性化消除行业动量干扰。",
+  "source": "A股市场的动量反转效应研究",
+  "expected_correlation": "低相关于overnight_reversal（后者仅用单日开-收盘差，此模板用多日收-收差及叠加）",
+  "failure_risks": {
+    "HIGH_TURNOVER": "反转信号换手较高，decay=8可缓解",
+    "LOW_FITNESS": "叠加rank后信号被稀释，确保各周期权重相等"
+  }
+}

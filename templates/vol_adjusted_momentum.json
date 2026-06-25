@@ -1,0 +1,43 @@
+{
+  "template_id": "vol_adjusted_momentum",
+  "description": "波动率调整动量因子：用日收益信息比率（均值/波动率）替代原始动量，规避高波动假信号",
+  "skeleton": "group_rank({ir_signal} / ({vol_signal} + 1e-6), {group})",
+  "field_pairs": [
+    {
+      "name": "ir",
+      "numerator": "ts_mean(returns, {ir_window})",
+      "denominator": "1"
+    },
+    {
+      "name": "vol",
+      "numerator": "ts_std_dev(returns, {vol_window})",
+      "denominator": "1"
+    }
+  ],
+  "param_ranges": {
+    "ir_window": [10, 20, 30],
+    "vol_window": [10, 20, 30],
+    "group": ["industry", "subindustry"],
+    "decay": [0, 4, 12],
+    "truncation": [0.08]
+  },
+  "default_settings": {
+    "instrumentType": "EQUITY",
+    "region": "USA",
+    "universe": "TOP3000",
+    "delay": 1,
+    "decay": 4,
+    "neutralization": "SUBINDUSTRY",
+    "truncation": 0.08,
+    "pasteurization": "ON",
+    "nanHandling": "ON",
+    "unitHandling": "VERIFY"
+  },
+  "hypothesis": "原始动量在高波动期容易产生假信号；用信息比率（收益/波动率）标准化后可区分真动量和高噪声；波动率本身就是反转预测因子，高波动对应更强均值回归。",
+  "source": "A股市场的动量反转效应研究",
+  "expected_correlation": "低相关于所有现有模板——首次引入returns字段的ts_std_dev作为条件变量，信号来源完全不同",
+  "failure_risks": {
+    "SIM_ERROR": "ts_std_dev(returns, window)在TOP3000需验证event类型——若为event则改用ts_std_dev(close/open-1, window)",
+    "LOW_FITNESS": "波动率倒数放大尾部效应，确保+1e-6防止除零"
+  }
+}
