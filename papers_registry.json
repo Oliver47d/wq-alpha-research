@@ -17,86 +17,37 @@
       "locator": "papers/1. A股市场的动量反转效应研究.pdf",
       "title": "A股市场的动量反转效应研究",
       "type": "research_report",
-      "status": "consumed",
-      "request_date": "2026-06-25T05:21:33.621613+00:00",
-      "read_date": "2026-06-25T05:26:00.000000+00:00",
-      "extracted_templates": [
-        "multi_period_reversal.json",
-        "volume_price_divergence_momentum.json",
-        "vol_adjusted_momentum.json"
-      ],
-      "extraction_round": 3,
-      "notes": "基于《A股市场的动量反转效应研究》：(1) 多周期叠加反转用close收-收差替代overnight_reversal的开-收盘差，覆盖5/10/20日窗口；(2) 量价背离用成交量变化率与价格变化率的乘积，捕获资金流向背离；(3) 波动率调整动量首次引入returns的ts_std_dev作为条件变量，与现有基本面/分析师模板低相关。"
+      "status": "unread"
     },
     "src_003": {
       "locator": "papers/10. 基于机构持股信息的Portable_Alpha策略增强.pdf",
       "title": "基于机构持股信息的Portable_Alpha策略增强",
       "type": "research_report",
-      "status": "consumed",
-      "extracted_templates": [
-        "institutional_sentiment_proxy"
-      ],
-      "extraction_date": "2026-06-25"
+      "status": "unread"
     },
     "src_004": {
       "locator": "papers/11. Level2行情选股因子初探.pdf",
       "title": "Level2行情选股因子初探",
       "type": "research_report",
-      "status": "consumed",
-      "request_date": "2026-06-25T05:31:03.431368+00:00",
-      "read_date": "2026-06-25T05:35:00.000000+00:00",
-      "extracted_templates": [
-        "vwap_reversion.json",
-        "vwap_momentum.json",
-        "overnight_gap_vwap_confirm.json"
-      ],
-      "extraction_round": 4,
-      "notes": "基于《Level2行情选股因子初探》：(1) vwap均值回归用close-vwap偏离度作为Level2订单流不平衡代理，是全新信号维度；(2) vwap动量用VWAP变化率/波动率替代传统收盘价动量，更稳健；(3) 跳空-VWAP确认因子融合隔夜跳空与VWAP日内确认，过滤假跳空。三个模板均首次引入vwap字段，与所有现有模板低相关。"
+      "status": "unread"
     },
     "src_005": {
       "locator": "papers/12. “量”与“价”的结合.pdf",
       "title": "“量”与“价”的结合",
       "type": "research_report",
-      "status": "consumed",
-      "request_date": "2026-06-25T05:34:58.607942+00:00",
-      "read_date": "2026-06-25T05:40:00.000000+00:00",
-      "extracted_templates": [
-        "volume_price_correlation.json",
-        "relative_volume_strength.json",
-        "price_range_volume_acceleration.json"
-      ],
-      "extraction_round": 5,
-      "notes": "基于《「量」与「价」的结合》：(1) 量价相关性用ts_corr(returns, volume)捕获趋势健康度；(2) 相对成交量强度用个股volume相对行业均值的偏离度，捕获资金流向的行业轮动；(3) 振幅-成交量加速度用成交量×波动率乘积的变化加速度，捕获趋势从积蓄到爆发的临界点。三个模板均引入volume相关信号，与所有现有模板低相关。"
+      "status": "unread"
     },
     "src_006": {
       "locator": "papers/13. 因子大讲坛.pdf",
       "title": "因子大讲坛",
       "type": "research_report",
-      "status": "consumed",
-      "request_date": "2026-06-25T05:41:04.030580+00:00",
-      "read_date": "2026-06-25T05:45:00.000000+00:00",
-      "extracted_templates": [
-        "analyst_revision_breadth.json",
-        "market_volatility_regime.json",
-        "sector_relative_momentum.json"
-      ],
-      "extraction_round": 6,
-      "notes": "基于《因子大讲坛》：(1) 分析师预期广度用ts_count向上vs向下变化次数的差值，区别于现有模板使用预测绝对值；(2) 市场波动率状态因子用个股波动率相对市场均值偏离，首次引入ts_mean(ts_std_dev())嵌套计算；(3) 行业相对动量用ts_mean(returns)/group_mean(ts_mean(returns))-1，纯化选股Alpha而非Beta。三个模板均与所有现有模板低相关。"
+      "status": "unread"
     },
     "src_007": {
       "locator": "papers/14. 交易行为的波动和股票预期收益.pdf",
       "title": "交易行为的波动和股票预期收益",
       "type": "research_report",
-      "status": "consumed",
-      "request_date": "2026-06-25T05:46:09.228077+00:00",
-      "read_date": "2026-06-25T10:30:00+08:00",
-      "extracted_templates": [
-        "amihud_illiquidity_proxy.json",
-        "trading_activity_volatility.json",
-        "asymmetric_price_impact.json"
-      ],
-      "extraction_round": 7,
-      "notes": "基于论文《交易行为的波动和股票预期收益》，创建3个新因子模板：(1) amihud_illiquidity_proxy：借鉴Amihud(2002)的|returns|/volume价格冲击代理，捕获流动性溢价；(2) trading_activity_volatility：用成交量波动系数捕获交易行为稳定性，区别于现有模板；(3) asymmetric_price_impact：借鉴Brennan et al.(2013)，用负收益日vs正收益日价格冲击的非对称性捕获流动性枯竭效应。所有模板仅使用确认存在的字段（returns/volume/vwap/adv20/cap/industry/subindustry）。"
+      "status": "unread"
     },
     "src_008": {
       "locator": "papers/15. 选股因子空头收益的转化.pdf",
@@ -569,7 +520,7 @@
   },
   "stats": {
     "total": 85,
-    "consumed": 7,
-    "remaining": 78
+    "consumed": 1,
+    "remaining": 84
   }
 }
