@@ -28,7 +28,7 @@
     "unitHandling": "VERIFY"
   },
   "hypothesis": "个股成交量相对行业平均的异常放大/萎缩，反映资金对该股票的关注度变化。group_mean做组内标准化后可跨行业比较。资金轮动时，成交量异常放大往往是领先信号。",
-  "source": ""量"与"价"的结合",
+  "source": "“量”与“价”的结合",
   "expected_correlation": "低相关于volume_price_divergence_momentum（后者用成交量变化率的符号，此模板用相对行业均值的偏离幅度）",
   "failure_risks": {
     "LOW_FITNESS": "相对成交量信号在低流动性股票可能不稳定，decay=4可缓解",

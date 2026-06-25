@@ -27,8 +27,8 @@
     "nanHandling": "ON",
     "unitHandling": "VERIFY"
   },
-  "hypothesis": "收益率与成交量正相关表示趋势有资金支撑（健康上涨）；负相关或零相关表示无趋势或假突破。ts_corr是"量"与"价"结合的核心表达。",
-  "source": ""量"与"价"的结合",
+  "hypothesis": "收益率与成交量正相关表示趋势有资金支撑（健康上涨）；负相关或零相关表示无趋势或假突破。ts_corr是“量”与“价”结合的核心表达。",
+  "source": "“量”与“价”的结合",
   "expected_correlation": "低相关于所有现有模板——ts_corr(returns, volume)是全新的信号维度",
   "failure_risks": {
     "LOW_SHARPE": "ts_corr信号较弱，可配合ts_mean做平滑",

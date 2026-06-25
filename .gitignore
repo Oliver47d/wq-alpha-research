@@ -1,4 +1,5 @@
 credential.txt
+BUGS_AND_IMPROVEMENTS.md
 alpha_db.json
 batch_submit_results.json
 alpha101_results.json
@@ -7,6 +8,8 @@ mining_state.json
 mining_report.json
 depth_request.json
 depth_response.json
+llm_request.json
+llm_response.json
 candidates.json
 *.pdf
 papers/

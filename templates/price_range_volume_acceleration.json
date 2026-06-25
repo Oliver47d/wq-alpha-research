@@ -28,8 +28,8 @@
     "nanHandling": "ON",
     "unitHandling": "VERIFY"
   },
-  "hypothesis": "量价齐升（高成交量 + 高振幅）是趋势爆发信号；量缩振幅收窄是趋势结束信号。ts_delta捕获的是成交量×波动率的变化加速度（资金从观望到介入的临界点），这是"量"与"价"融合的最高级形态。",
-  "source": ""量"与"价"的结合",
+  "hypothesis": "量价齐升（高成交量 + 高振幅）是趋势爆发信号；量缩振幅收窄是趋势结束信号。ts_delta捕获的是成交量×波动率的变化加速度（资金从观望到介入的临界点），这是“量”与“价”融合的最高级形态。",
+  "source": "“量”与“价”的结合",
   "expected_correlation": "低相关于所有现有模板——首次引入量×波动率乘积的加速度概念，完全新的信息维度",
   "failure_risks": {
     "LOW_FITNESS": "ts_delta(ts_std_dev(returns,window), accel_window)中双重时序操作可能产生NaN，nanHandling=ON可缓解",

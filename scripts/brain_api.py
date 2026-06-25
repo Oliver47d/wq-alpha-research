@@ -314,8 +314,16 @@ class BrainClient:
         # Fetch full alpha data to get sharpe/fitness/turnover from /alphas/{alphaId}
         alpha_data = self.get_alpha(alpha_id)
         if not alpha_data:
+            # The simulation itself COMPLETED — we just couldn't retrieve the
+            # metrics. Flag this as a distinct FETCH_ERROR so it is NOT recorded
+            # as a SIM_ERROR (which would wrongly penalize the template) and can
+            # be retried as a transient failure.
             logger.info("Could not fetch alpha metrics alpha_id=%s sim_id=%s expr_hash=%s", alpha_id, sim_id, expr_hash)
-            return {"status": "ERROR", "error": f"Could not fetch alpha {alpha_id}", "alpha_id": alpha_id}
+            return {
+                "status": "FETCH_ERROR",
+                "error": f"Could not fetch alpha {alpha_id}",
+                "alpha_id": alpha_id,
+            }
 
         is_data = alpha_data.get("is", {}) if isinstance(alpha_data, dict) else {}
         logger.info(
@@ -369,6 +377,11 @@ class BrainClient:
         if status == "TIMEOUT":
             # A TIMEOUT from _poll_simulation means the simulation was already
             # created; retrying would POST a duplicate simulation.
+            return False
+        if status == "FETCH_ERROR":
+            # Simulation already COMPLETED and get_alpha has already retried the
+            # metrics fetch internally (eventual consistency). Do NOT batch-retry
+            # — that would re-POST a duplicate simulation and waste fuel.
             return False
         if isinstance(status_code, int) and status_code in {429, 500, 502, 503, 504}:
             return True
@@ -672,29 +685,49 @@ class BrainClient:
         )
         return active
 
-    def get_alpha(self, alpha_id: str) -> dict:
-        logger.info("Fetching alpha details alpha_id=%s", alpha_id)
-        resp = self.get_with_retry(f"{API_BASE}/alphas/{alpha_id}")
-        if resp.status_code == 200:
-            data = resp.json()
-            is_data = data.get("is", {}) if isinstance(data, dict) else {}
+    def get_alpha(self, alpha_id: str, retries: int = 3, retry_sleep: float = 2.0) -> dict:
+        """Fetch full alpha metrics.
+
+        The simulation may report COMPLETE slightly before the alpha record is
+        queryable (eventual consistency), so retry on empty/non-200 before
+        giving up. Returns {} only after exhausting retries — callers treat that
+        as a *fetch* failure (FETCH_ERROR), NOT a simulation error.
+        """
+        logger.info("Fetching alpha details alpha_id=%s retries=%s", alpha_id, retries)
+        for attempt in range(retries + 1):
+            try:
+                resp = self.get_with_retry(f"{API_BASE}/alphas/{alpha_id}")
+            except Exception as e:
+                logger.info("Fetch alpha details exception alpha_id=%s attempt=%s/%s error=%s", alpha_id, attempt + 1, retries + 1, e)
+                if attempt >= retries:
+                    return {}
+                time.sleep(retry_sleep * (attempt + 1))
+                continue
+            if resp.status_code == 200:
+                data = resp.json()
+                is_data = data.get("is", {}) if isinstance(data, dict) else {}
+                logger.info(
+                    "Fetched alpha details alpha_id=%s status=%s sharpe=%s fitness=%s turnover=%s",
+                    alpha_id,
+                    data.get("status") if isinstance(data, dict) else None,
+                    is_data.get("sharpe"),
+                    is_data.get("fitness"),
+                    is_data.get("turnover"),
+                )
+                return data
             logger.info(
-                "Fetched alpha details alpha_id=%s status=%s sharpe=%s fitness=%s turnover=%s",
+                "Fetch alpha details failed alpha_id=%s attempt=%s/%s status_code=%s body_len=%s body_hash=%s",
                 alpha_id,
-                data.get("status") if isinstance(data, dict) else None,
-                is_data.get("sharpe"),
-                is_data.get("fitness"),
-                is_data.get("turnover"),
+                attempt + 1,
+                retries + 1,
+                resp.status_code,
+                len(resp.text or ""),
+                _text_fingerprint(resp.text or ""),
             )
-            return data
-        logger.info(
-            "Fetch alpha details failed alpha_id=%s status_code=%s body_len=%s body_hash=%s",
-            alpha_id,
-            resp.status_code,
-            len(resp.text or ""),
-            _text_fingerprint(resp.text or ""),
-        )
-        logger.debug("Fetch alpha details failed body alpha_id=%s body=%s", alpha_id, resp.text[:1000])
+            logger.debug("Fetch alpha details failed body alpha_id=%s body=%s", alpha_id, resp.text[:1000])
+            if attempt >= retries:
+                return {}
+            time.sleep(retry_sleep * (attempt + 1))
         return {}
 
     def fetch_pnl(self, alpha_id: str, retries: int = 3, retry_sleep: float = 2.0) -> list[float]:
@@ -828,18 +861,49 @@ def daily_returns(cum_pnl: list[float]) -> list[float]:
     return [cum_pnl[i + 1] - cum_pnl[i] for i in range(len(cum_pnl) - 1)]
 
 
+def _align_returns(
+    a: list[float], b: list[float]
+) -> tuple[np.ndarray, np.ndarray]:
+    """Align two daily-return series for correlation.
+
+    PnL series are cumulative and sorted ascending by date. Different alphas
+    are simulated against the same data end date but may start on different
+    dates (data availability), so the series share their most-recent tail but
+    differ in length at the head. We align on the common overlapping tail
+    rather than demanding identical lengths — the old exact-length check made
+    the correlation gate fire almost never.
+    """
+    n = min(len(a), len(b))
+    if n == 0:
+        return np.array([]), np.array([])
+    return np.array(a[-n:]), np.array(b[-n:])
+
+
 def compute_correlation(
-    new_pnl: list[float], db: dict[str, Any], min_records: int = 50
+    new_pnl: list[float],
+    db: dict[str, Any],
+    min_records: int = 50,
+    min_overlap: int = 50,
 ) -> list[dict[str, Any]]:
     if len(new_pnl) < min_records + 1:
         return []
-    new_ret = np.array(daily_returns(new_pnl))
+    new_ret_full = daily_returns(new_pnl)
     results: list[dict[str, Any]] = []
     for old_id, old in db.get("alphas", {}).items():
         if old.get("status") != "ACTIVE" or not old.get("pnl"):
             continue
-        old_ret = np.array(daily_returns(old["pnl"]))
-        if len(new_ret) != len(old_ret):
+        old_ret_full = daily_returns(old["pnl"])
+        new_ret, old_ret = _align_returns(new_ret_full, old_ret_full)
+        # Need enough overlapping points for a meaningful correlation.
+        if len(new_ret) < min_overlap:
+            logger.info(
+                "Skipping correlation: insufficient overlap old_alpha_id=%s overlap=%s new_len=%s old_len=%s",
+                old_id, len(new_ret), len(new_ret_full), len(old_ret_full),
+            )
+            continue
+        # corrcoef is undefined when either series is constant.
+        if np.std(new_ret) == 0 or np.std(old_ret) == 0:
+            logger.info("Skipping correlation: constant series old_alpha_id=%s", old_id)
             continue
         corr = float(np.corrcoef(new_ret, old_ret)[0, 1])
         if np.isnan(corr):
@@ -900,6 +964,13 @@ def update_lessons_from_result(
 ) -> None:
     """Update lessons.json with results from a simulation."""
     template_id = candidate.get("template_id", "unknown")
+    # A FETCH_ERROR means the simulation COMPLETED but its metrics couldn't be
+    # retrieved (infra/eventual-consistency issue). It says nothing about the
+    # template's quality, so do not record it — counting it would wrongly inflate
+    # the template's sim_errors and bias its action toward skip/deprioritize.
+    if sim_result.get("status") == "FETCH_ERROR":
+        logger.info("Skipping lessons update for FETCH_ERROR template_id=%s alpha_id=%s", template_id, sim_result.get("alpha_id"))
+        return
     sim_data = sim_result.get("sim_data", {})
     is_data = sim_data.get("is", {}) if isinstance(sim_data, dict) else {}
     if not is_data:
@@ -917,11 +988,16 @@ def update_lessons_from_result(
             "description": f"Template: {template_id}",
             "tested": 0, "passed": 0, "pass_rate": 0.0,
             "avg_sharpe": 0.0, "avg_fitness": 0.0,
+            "sharpe_count": 0, "fitness_count": 0, "sim_errors": 0,
             "best": None, "failure_modes": {}, "action": "expand",
             "notes": "",
         }
 
     p = patterns[template_id]
+    # Backward-compat: older lessons.json may lack the per-metric counters.
+    p.setdefault("sharpe_count", 0)
+    p.setdefault("fitness_count", 0)
+    p.setdefault("sim_errors", 0)
     p["tested"] += 1
 
     # Determine pass/fail
@@ -947,18 +1023,25 @@ def update_lessons_from_result(
         fm = p.setdefault("failure_modes", {})
         fm[mode] = fm.get(mode, 0) + 1
 
-    # Update averages
+    # Update averages over VALID samples only. `tested` counts every result
+    # (incl. SIM_ERROR with sharpe=None); using it as the divisor would
+    # systematically bias avg_sharpe/avg_fitness downward. Track per-metric
+    # counts instead.
+    if sharpe is None:
+        p["sim_errors"] += 1
     if sharpe is not None:
-        old_count = p["tested"] - 1
+        old_count = p["sharpe_count"]
+        p["sharpe_count"] += 1
         if old_count > 0:
-            p["avg_sharpe"] = (p["avg_sharpe"] * old_count + sharpe) / p["tested"]
+            p["avg_sharpe"] = (p["avg_sharpe"] * old_count + sharpe) / p["sharpe_count"]
         else:
             p["avg_sharpe"] = sharpe
 
     if fitness is not None:
-        old_count = p["tested"] - 1
+        old_count = p["fitness_count"]
+        p["fitness_count"] += 1
         if old_count > 0:
-            p["avg_fitness"] = (p["avg_fitness"] * old_count + fitness) / p["tested"]
+            p["avg_fitness"] = (p["avg_fitness"] * old_count + fitness) / p["fitness_count"]
         else:
             p["avg_fitness"] = fitness
 
@@ -990,16 +1073,19 @@ def update_lessons_from_result(
     for param_name, param_val in params.items():
         pi = param_insights.setdefault(param_name, {})
         entry = pi.setdefault(param_val, {
-            "avg_sharpe": 0.0, "verdict": "neutral", "notes": "", "count": 0
+            "avg_sharpe": 0.0, "verdict": "neutral", "notes": "", "count": 0,
+            "sharpe_count": 0,
         })
+        entry.setdefault("sharpe_count", 0)
         entry["count"] += 1
         if sharpe is not None:
-            old_count = entry["count"] - 1
+            old_count = entry["sharpe_count"]
+            entry["sharpe_count"] += 1
             if old_count > 0:
-                entry["avg_sharpe"] = (entry["avg_sharpe"] * old_count + sharpe) / entry["count"]
+                entry["avg_sharpe"] = (entry["avg_sharpe"] * old_count + sharpe) / entry["sharpe_count"]
             else:
                 entry["avg_sharpe"] = sharpe
-            if entry["count"] >= 3:
+            if entry["sharpe_count"] >= 3:
                 if entry["avg_sharpe"] >= 1.5:
                     entry["verdict"] = "prefer"
                 elif entry["avg_sharpe"] < 0.8:

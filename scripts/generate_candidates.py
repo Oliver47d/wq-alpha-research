@@ -97,18 +97,32 @@ class FieldValidator:
 # --------------------------------------------------------------------------- #
 # Template expansion
 # --------------------------------------------------------------------------- #
-def load_templates(templates_dir: Path | None = None) -> list[dict[str, Any]]:
+def load_templates(templates_dir: Path | None = None, strict: bool = True) -> list[dict[str, Any]]:
     tdir = templates_dir or TEMPLATES_DIR
     if not tdir.exists():
         return []
     templates = []
+    errors: list[str] = []
     for fp in sorted(tdir.glob("*.json")):
         try:
             tpl = json.loads(fp.read_text(encoding="utf-8"))
             tpl["_filename"] = fp.name
             templates.append(tpl)
+        except json.JSONDecodeError as e:
+            # A corrupt template means a paper's extracted factor never gets
+            # mined. Do NOT swallow this silently — surface it loudly.
+            msg = f"{fp.name}: {e}"
+            errors.append(msg)
+            print(f"  [ERROR] Invalid template JSON {msg}", flush=True)
         except Exception as e:
-            print(f"  [warn] Failed to load {fp.name}: {e}", flush=True)
+            msg = f"{fp.name}: {e}"
+            errors.append(msg)
+            print(f"  [ERROR] Failed to load template {msg}", flush=True)
+    if errors and strict:
+        raise ValueError(
+            f"Failed to load {len(errors)} template(s):\n  - "
+            + "\n  - ".join(errors)
+        )
     return templates
 
 
@@ -119,12 +133,56 @@ def _fill_skeleton(skeleton: str, replacements: dict[str, str]) -> str:
     return expr
 
 
+def _placeholders(text: str) -> set[str]:
+    """Return the set of {placeholder} names in a string."""
+    return set(re.findall(r"\{([^}]+)\}", text))
+
+
+def _signal_expr(fp: dict[str, Any]) -> str | None:
+    """Build a signal expression from a field_pair's numerator/denominator.
+
+    Returns None for legacy direct-key field_pairs that have no numerator
+    (those are filled by direct key substitution instead).
+    """
+    num = str(fp.get("numerator", "")).strip()
+    if not num:
+        return None
+    den = str(fp.get("denominator", "1")).strip()
+    if den in ("", "1"):
+        return num
+    return f"({num}) / ({den})"
+
+
+def _fp_for_slot(slot: str, field_pairs: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Map a skeleton signal slot to the field_pair whose `name` matches.
+
+    Accepts both exact name match ({gap} -> name 'gap') and the common
+    `<name>_signal` convention ({ir_signal} -> name 'ir').
+    """
+    base = slot[:-len("_signal")] if slot.endswith("_signal") else slot
+    for fp in field_pairs:
+        name = fp.get("name")
+        if name == slot or name == base:
+            return fp
+    return None
+
+
 def expand_template(
     template: dict[str, Any],
     max_candidates: int = 20,
     validator: FieldValidator | None = None,
 ) -> list[dict[str, Any]]:
     """Expand a template into a list of simulation candidates.
+
+    Supports two template styles:
+
+    * Legacy direct-key: skeleton placeholders ({numerator}, {denominator},
+      {estimate_field}, ...) match field_pair keys directly.
+    * Named-signal: skeleton references signal slots ({signal}, {rvs_signal},
+      {gap}, ...). Each signal is assembled from a field_pair's
+      numerator/denominator. A skeleton with one slot + multiple field_pairs is
+      treated as *alternatives* (one candidate per field_pair); a skeleton with
+      >=2 distinct slots is *combined* (all field_pairs merged into one expr).
 
     Each candidate: {expression, settings, template_id, field_pair, params}
     """
@@ -137,49 +195,100 @@ def expand_template(
     if not skeleton or not field_pairs:
         return []
 
-    # Build param grid
-    param_keys = list(param_ranges.keys())
-    param_combos = [{}]
-    for key in param_keys:
-        values = param_ranges[key]
-        new_combos = []
-        for combo in param_combos:
-            for val in values:
-                new_combos.append({**combo, key: val})
-        param_combos = new_combos
+    # Split param_ranges into a grid (list values) and derived params (string
+    # templates that reference other params, e.g. est_up = "ts_delta({est_field}, {window})").
+    grid_params = {k: v for k, v in param_ranges.items() if isinstance(v, list)}
+    derived_params = {k: v for k, v in param_ranges.items() if isinstance(v, str)}
+
+    # Build the cartesian product of grid params.
+    param_combos: list[dict[str, Any]] = [{}]
+    for key, values in grid_params.items():
+        param_combos = [{**combo, key: val} for combo in param_combos for val in values]
+
+    # Identify signal slots: skeleton placeholders that are neither grid/derived
+    # params nor direct field_pair keys.
+    fp_direct_keys: set[str] = set()
+    for fp in field_pairs:
+        fp_direct_keys |= set(fp.keys())
+    sk_ph = _placeholders(skeleton)
+    signal_slots = [p for p in sk_ph if p not in param_ranges and p not in fp_direct_keys]
+
+    def _finalize(expr: str, pc: dict[str, Any]) -> str:
+        # Resolve derived params using the current param combo first, then fill.
+        rep = dict(pc)
+        for dk, dtmpl in derived_params.items():
+            rep[dk] = _fill_skeleton(str(dtmpl), pc)
+        expr = _fill_skeleton(expr, rep)
+        # Second pass: derived params may introduce further param references.
+        expr = _fill_skeleton(expr, rep)
+        return expr
+
+    def _settings_for(pc: dict[str, Any]) -> dict[str, Any]:
+        settings = dict(default_settings)
+        if "decay" in pc:
+            settings["decay"] = int(pc["decay"]) if str(pc["decay"]).isdigit() else pc["decay"]
+        if "neutralization" in pc:
+            settings["neutralization"] = pc["neutralization"]
+        if "delay" in pc:
+            settings["delay"] = int(pc["delay"])
+        if "truncation" in pc:
+            settings["truncation"] = pc["truncation"]
+        return settings
 
     candidates: list[dict[str, Any]] = []
-    for fp in field_pairs:
+
+    # Decide combined vs alternatives mode.
+    combined = False
+    slot_map: dict[str, dict[str, Any]] = {}
+    if len(signal_slots) >= 2:
+        slot_map = {s: _fp_for_slot(s, field_pairs) for s in signal_slots}
+        combined = all(v is not None for v in slot_map.values())
+
+    if combined:
+        # Fill every slot with its mapped field_pair's signal expression.
         for pc in param_combos:
             if len(candidates) >= max_candidates:
                 break
-
-            replacements = {**fp, **pc}
-            expr = _fill_skeleton(skeleton, replacements)
-
-            # Build settings
-            settings = dict(default_settings)
-            # Map common param names to settings
-            if "decay" in pc:
-                settings["decay"] = int(pc["decay"]) if str(pc["decay"]).isdigit() else pc["decay"]
-            if "neutralization" in pc:
-                settings["neutralization"] = pc["neutralization"]
-            if "delay" in pc:
-                settings["delay"] = int(pc["delay"])
-
-            # Validate fields if validator provided
+            expr = skeleton
+            for slot, fp in slot_map.items():
+                expr = expr.replace(f"{{{slot}}}", _signal_expr(fp) or "")
+            expr = _finalize(expr, pc)
             if validator and not validator.validate_expression(expr):
                 continue
-
-            candidate = {
+            candidates.append({
                 "expression": expr,
-                "settings": settings,
+                "settings": _settings_for(pc),
+                "template_id": template_id,
+                "field_pair": [fp.get("name") for fp in field_pairs],
+                "params": pc,
+            })
+        return candidates
+
+    # Alternatives / legacy direct-key mode: each field_pair yields candidates.
+    for fp in field_pairs:
+        sig = _signal_expr(fp)
+        for pc in param_combos:
+            if len(candidates) >= max_candidates:
+                break
+            expr = skeleton
+            if signal_slots and sig is not None:
+                for slot in signal_slots:
+                    expr = expr.replace(f"{{{slot}}}", sig)
+            # Legacy direct-key fill (numerator/denominator/estimate_field/...).
+            expr = _fill_skeleton(
+                expr,
+                {k: v for k, v in fp.items() if k not in ("name", "description")},
+            )
+            expr = _finalize(expr, pc)
+            if validator and not validator.validate_expression(expr):
+                continue
+            candidates.append({
+                "expression": expr,
+                "settings": _settings_for(pc),
                 "template_id": template_id,
                 "field_pair": fp,
                 "params": pc,
-            }
-            candidates.append(candidate)
-
+            })
         if len(candidates) >= max_candidates:
             break
 
