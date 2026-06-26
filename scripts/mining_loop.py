@@ -16,6 +16,7 @@ import hashlib
 import json
 import logging
 import os
+import random
 import subprocess
 import sys
 import time
@@ -74,6 +75,18 @@ MAX_AGENT_FAILURES = 3
 # Round limits
 MAX_ROUNDS = 50  # safety cap
 MAX_CANDIDATES_PER_ROUND = 60
+# #7: exploration budget. When more candidates are generated than fit in a
+# round, reserve a fraction of the slots for a random sample of the *tail*
+# (the deterministically-ordered losers) instead of cutting them all off.
+# This breaks the pure-greedy / sequential-truncation lock-in.
+EXPLORE_EPSILON = float(os.getenv("WQ_EXPLORE_EPSILON", "0.15"))
+# #10: error self-reinforcement guard. A `skip` verdict can be triggered by a
+# run of transient SIM_ERRORs (not real failure); once skipped, the template
+# gets zero budget and can never gather the samples to redeem itself. With this
+# probability a skipped template/structure is still given a tiny exploration
+# budget so it keeps a chance to recover. Set 0 to disable.
+SKIP_REVIVAL_PROB = float(os.getenv("WQ_SKIP_REVIVAL_PROB", "0.1"))
+SKIP_REVIVAL_BUDGET = int(os.getenv("WQ_SKIP_REVIVAL_BUDGET", "2"))
 DEPTH_BACKENDS = {"handoff", "claude", "manual", "none"}
 PRODUCERS = {"template", "llm"}
 
@@ -238,6 +251,35 @@ def save_papers_registry(reg: dict) -> None:
 # Breadth phase
 # ---------------------------------------------------------------------------
 
+def _truncate_with_exploration(
+    candidates: list[dict],
+    limit: int,
+    epsilon: float = EXPLORE_EPSILON,
+) -> list[dict]:
+    """Cap candidates to `limit`, reserving an exploration quota for the tail.
+
+    Candidates arrive in deterministic priority order (best first). A pure
+    `[:limit]` cut means the tail never runs and the search locks into a local
+    optimum. Instead we keep the top `(1-epsilon)*limit` exploiters and fill the
+    remaining slots with a random sample drawn from the truncated tail
+    (ε-greedy). With epsilon<=0 or no overflow this is a plain head cut.
+    """
+    if limit <= 0 or len(candidates) <= limit:
+        return candidates[:limit] if limit > 0 else []
+    if epsilon <= 0:
+        return candidates[:limit]
+    explore_slots = max(1, int(round(limit * epsilon)))
+    exploit_slots = limit - explore_slots
+    head = candidates[:exploit_slots]
+    tail = candidates[exploit_slots:]
+    explore = random.sample(tail, min(explore_slots, len(tail)))
+    logger.info(
+        "Exploration truncation limit=%s exploit=%s explore=%s tail_pool=%s",
+        limit, len(head), len(explore), len(tail),
+    )
+    return head + explore
+
+
 def build_candidates(
     lessons: dict,
     max_per_template: int = 15,
@@ -312,7 +354,17 @@ def build_candidates_llm(lessons: dict) -> list[dict]:
         except Exception:
             ast = None
         roll = by_ast.get(ast, {}) if ast else {}
+        # #10: a tiny revival chance keeps a structure skipped off transient
+        # errors from being permanently starved (mirrors the template path).
+        revive = SKIP_REVIVAL_PROB > 0 and random.random() < SKIP_REVIVAL_PROB
         if roll.get("action") == "skip":
+            if revive:
+                logger.info("LLM candidate revived from rollup skip ast_hash=%s tested=%s", ast, roll.get("tested"))
+                print(f"  [revive] structure {ast} (skip, exploring)")
+                if ast:
+                    c["ast_hash"] = ast
+                kept.append(c)
+                continue
             logger.info(
                 "LLM candidate skipped by rollup ast_hash=%s tested=%s submit=%s observe=%s",
                 ast, roll.get("tested"), roll.get("submit"), roll.get("observe"),
@@ -320,6 +372,12 @@ def build_candidates_llm(lessons: dict) -> list[dict]:
             print(f"  [skip] structure {ast} (tested={roll.get('tested')}, no passes)")
             continue
         if patterns.get(cid, {}).get("action") == "skip":
+            if revive:
+                logger.info("LLM candidate revived from concept skip concept_id=%s", cid)
+                if ast:
+                    c["ast_hash"] = ast
+                kept.append(c)
+                continue
             logger.info("LLM candidate skipped by lessons concept_id=%s", cid)
             continue
         if ast:
@@ -327,8 +385,8 @@ def build_candidates_llm(lessons: dict) -> list[dict]:
         kept.append(c)
 
     if len(kept) > MAX_CANDIDATES_PER_ROUND:
-        kept = kept[:MAX_CANDIDATES_PER_ROUND]
-        print(f"  [cap] Truncated to {MAX_CANDIDATES_PER_ROUND} candidates")
+        kept = _truncate_with_exploration(kept, MAX_CANDIDATES_PER_ROUND)
+        print(f"  [cap] Truncated to {len(kept)} candidates (ε-greedy explore)")
     logger.info("LLM producer complete candidate_count=%s", len(kept))
     return kept
 
@@ -348,6 +406,7 @@ def build_candidates_template(lessons: dict, max_per_template: int = 15) -> list
     print(f"  [field-validator] Loaded {len(validator.field_list)} fields for validation")
 
     patterns = lessons.get("patterns", {})
+    param_insights = lessons.get("param_insights", {})
     all_candidates: list[dict] = []
 
     for tmpl in templates:
@@ -356,6 +415,22 @@ def build_candidates_template(lessons: dict, max_per_template: int = 15) -> list
         action = pat.get("action", "expand")
 
         if action == "skip":
+            # #10: keep a small revival chance so a template skipped off a few
+            # transient errors isn't starved of samples forever.
+            if SKIP_REVIVAL_PROB > 0 and random.random() < SKIP_REVIVAL_PROB:
+                logger.info(
+                    "Template skip revived for exploration template_id=%s tested=%s budget=%s",
+                    tid, pat.get("tested", 0), SKIP_REVIVAL_BUDGET,
+                )
+                print(f"  [revive] {tid} (skip, exploring {SKIP_REVIVAL_BUDGET} candidates)")
+                cands = expand_template(
+                    tmpl,
+                    max_candidates=SKIP_REVIVAL_BUDGET,
+                    validator=validator,
+                    param_insights=param_insights,
+                )
+                all_candidates.extend(cands)
+                continue
             logger.info(
                 "Template skipped template_id=%s pass_rate=%s tested=%s",
                 tid,
@@ -367,7 +442,12 @@ def build_candidates_template(lessons: dict, max_per_template: int = 15) -> list
 
         # Deprioritize: reduce candidate count
         effective_max = max_per_template // 2 if action == "deprioritize" else max_per_template
-        cands = expand_template(tmpl, max_candidates=effective_max, validator=validator)
+        cands = expand_template(
+            tmpl,
+            max_candidates=effective_max,
+            validator=validator,
+            param_insights=param_insights,
+        )
         logger.info(
             "Template expanded template_id=%s action=%s effective_max=%s generated=%s",
             tid,
@@ -385,9 +465,9 @@ def build_candidates_template(lessons: dict, max_per_template: int = 15) -> list
 
     # Cap total
     if len(all_candidates) > MAX_CANDIDATES_PER_ROUND:
-        all_candidates = all_candidates[:MAX_CANDIDATES_PER_ROUND]
-        logger.info("Candidates capped max=%s", MAX_CANDIDATES_PER_ROUND)
-        print(f"  [cap] Truncated to {MAX_CANDIDATES_PER_ROUND} candidates")
+        all_candidates = _truncate_with_exploration(all_candidates, MAX_CANDIDATES_PER_ROUND)
+        logger.info("Candidates capped max=%s kept=%s", MAX_CANDIDATES_PER_ROUND, len(all_candidates))
+        print(f"  [cap] Truncated to {len(all_candidates)} candidates (ε-greedy explore)")
 
     logger.info("Build candidates complete candidate_count=%s", len(all_candidates))
     return all_candidates
@@ -548,22 +628,39 @@ def run_breadth_round(
                 "simulated_at": datetime.now(timezone.utc).isoformat(),
             }
 
-        # Compute correlation against existing ACTIVE alphas
+        # Compute correlation against existing alphas.
+        # #11: prefer BRAIN's authoritative self-correlation endpoint (it scores
+        # against the *entire* alpha pool on full return series). Fall back to
+        # the local PnL-tail estimate only when the platform endpoint genuinely
+        # fails (returns None) — an empty pool legitimately returns 0.0, which
+        # we keep rather than overriding with the local estimate.
         max_corr = None
-        if alpha_id and active_pnls:
-            new_pnl = action_client.fetch_pnl(alpha_id)
-            logger.info("Fetched new alpha PnL alpha_id=%s records=%s", alpha_id, len(new_pnl))
-            if len(new_pnl) >= 50:
-                corr_list = compute_correlation(
-                    new_pnl,
-                    {"alphas": {aid: {"status": "ACTIVE", "pnl": p} for aid, p in active_pnls.items()}},
-                )
-                if corr_list:
-                    max_corr = max(abs(c.get("correlation", 0)) for c in corr_list)
-            logger.info("Correlation computed alpha_id=%s max_corr=%s active_compare_count=%s", alpha_id, max_corr, len(active_pnls))
+        if alpha_id:
+            platform_corr = action_client.fetch_self_correlation(alpha_id)
+            if platform_corr is not None:
+                max_corr = platform_corr
+                logger.info("Self-correlation (platform) alpha_id=%s max_corr=%s", alpha_id, max_corr)
+            elif active_pnls:
+                new_pnl = action_client.fetch_pnl(alpha_id)
+                logger.info("Platform self-correlation unavailable; falling back to local PnL estimate alpha_id=%s records=%s", alpha_id, len(new_pnl))
+                if len(new_pnl) >= 50:
+                    corr_list = compute_correlation(
+                        new_pnl,
+                        {"alphas": {aid: {"status": "ACTIVE", "pnl": p} for aid, p in active_pnls.items()}},
+                    )
+                    if corr_list:
+                        max_corr = max(abs(c.get("correlation", 0)) for c in corr_list)
+                logger.info("Correlation computed (local fallback) alpha_id=%s max_corr=%s active_compare_count=%s", alpha_id, max_corr, len(active_pnls))
 
-        # Quality filter
-        action = quality_filter(sharpe, fitness, turnover, max_corr)
+        # Quality filter (#6: pass BRAIN's robustness checks so SUBMIT-grade
+        # but non-robust alphas are demoted to OBSERVE rather than auto-submitted;
+        # #8: pass the campaign trial count so the SUBMIT Sharpe bar is raised to
+        # offset multiple-testing selection bias)
+        checks = is_data.get("checks") if isinstance(is_data, dict) else None
+        action = quality_filter(
+            sharpe, fitness, turnover, max_corr, checks=checks,
+            trials=len(lessons.get("experiments", [])),
+        )
         expression = r.get("expression", "")
         logger.info(
             "Candidate classified alpha_id=%s action=%s sharpe=%s fitness=%s turnover=%s max_corr=%s template_id=%s expr_hash=%s expr_len=%s",
@@ -835,6 +932,48 @@ def create_depth_request(src_id: str, reg: dict, lessons: dict, reason: str) -> 
     return request
 
 
+def _validate_template_file(path: Path, validator: "FieldValidator") -> list[str]:
+    """#16: validate a freshly-handed-off template BEFORE accepting it.
+
+    A bad template (broken JSON / missing fields / non-compilable expression)
+    used to slip into the templates dir and only blow up later at simulation
+    time (that was the root cause of bug #1). Validate at the handoff seam:
+      1. parses as JSON
+      2. has the required structural fields
+      3. expand_template yields >=1 candidate whose expression passes the field
+         validator (i.e. no leftover placeholders, known fields/operators)
+
+    Returns a list of error strings (empty list == valid).
+    """
+    errors: list[str] = []
+    try:
+        tpl = json.loads(path.read_text("utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        return [f"unreadable/invalid JSON: {e}"]
+
+    if not isinstance(tpl, dict):
+        return ["top-level template is not a JSON object"]
+
+    for key in ("template_id", "skeleton", "field_pairs"):
+        if not tpl.get(key):
+            errors.append(f"missing/empty required field: {key}")
+    if errors:
+        return errors
+
+    # Compile the template into candidates with field validation on. A template
+    # that expands to zero valid candidates is dead on arrival.
+    try:
+        cands = expand_template(tpl, max_candidates=5, validator=validator)
+    except Exception as e:  # defensive: malformed param_ranges etc.
+        return [f"expand_template raised: {e}"]
+    if not cands:
+        errors.append(
+            "expands to 0 valid candidates "
+            "(leftover placeholders, unknown fields/operators, or empty field_pairs)"
+        )
+    return errors
+
+
 def consume_depth_response(reg: dict) -> str:
     """Consume depth_response.json from the outer Agent and update paper registry.
 
@@ -899,7 +1038,11 @@ def consume_depth_response(reg: dict) -> str:
 
     normalized_templates = []
     missing = []
+    invalid: dict[str, list[str]] = {}
     existing_templates = set(pending_request.get("existing_templates", []))
+    # #16: validate each handed-off template at the ingestion seam, not later at
+    # simulation. A FieldValidator is shared across all files in this response.
+    tmpl_validator = FieldValidator(FIELDS_PATH)
     for name in created_templates:
         if not isinstance(name, str):
             logger.info("Depth response blocked: non-string template name=%r", name)
@@ -921,12 +1064,24 @@ def consume_depth_response(reg: dict) -> str:
             print(f"[depth] Template path escapes templates directory: {filename}")
             return "blocked"
         if template_path.exists():
-            normalized_templates.append(filename)
+            tmpl_errors = _validate_template_file(template_path, tmpl_validator)
+            if tmpl_errors:
+                invalid[filename] = tmpl_errors
+            else:
+                normalized_templates.append(filename)
         else:
             missing.append(filename)
     if missing:
         logger.info("Depth response blocked: missing template files=%s", missing)
         print(f"[depth] Depth response references missing template files: {missing}")
+        return "blocked"
+    # #16: reject the whole handoff if any template fails validation — a broken
+    # template must not be silently consumed (that is exactly how bug #1 slipped
+    # in). The paper stays unconsumed so it can be re-extracted.
+    if invalid:
+        for fn, errs in invalid.items():
+            logger.info("Depth response blocked: invalid template filename=%s errors=%s", fn, errs)
+            print(f"[depth] Invalid template {fn}: {'; '.join(errs)}")
         return "blocked"
 
     src = reg["sources"][src_id]
@@ -1173,17 +1328,26 @@ def fuel_one_paper_manual(src_id: str, reg: dict, lessons: dict) -> bool:
             print(f"  [manual] Failed to read: {e}")
             return False
 
-        # Simple heuristic: look for formula-like patterns
-        # This is a very basic fallback
+        # Heuristic extraction is not implemented. Do NOT mark the paper as
+        # `consumed` — that would permanently burn the material without ever
+        # extracting a template (it would never be re-read). Mark it
+        # `extraction_failed` so a future run with a real extractor can retry.
+        # Note: extraction_failed != consumed, so stats.consumed is untouched
+        # and the paper still counts as remaining.
         print(f"  [manual] Read {len(text)} chars. Heuristic extraction not implemented.")
-        print(f"  [manual] Marking as consumed to avoid re-processing.")
+        print(f"  [manual] Marking as extraction_failed (retryable), NOT consumed.")
 
-        reg["sources"][src_id]["status"] = "consumed"
-        reg["sources"][src_id]["read_date"] = datetime.now(timezone.utc).isoformat()
-        reg["stats"]["consumed"] = reg["stats"].get("consumed", 0) + 1
+        src = reg["sources"][src_id]
+        src["status"] = "extraction_failed"
+        src["read_date"] = datetime.now(timezone.utc).isoformat()
+        src["extraction_attempts"] = src.get("extraction_attempts", 0) + 1
+        # Recompute stats from source statuses (consumed unchanged; this paper
+        # stays in `remaining` because its status is not "consumed").
+        sources = reg.get("sources", {})
+        reg["stats"]["consumed"] = sum(1 for s in sources.values() if s.get("status") == "consumed")
         reg["stats"]["remaining"] = max(0, reg["stats"].get("total", 0) - reg["stats"]["consumed"])
         save_papers_registry(reg)
-        logger.info("Depth manual consumed source_id=%s chars=%s", src_id, len(text))
+        logger.info("Depth manual extraction_failed source_id=%s chars=%s attempts=%s", src_id, len(text), src["extraction_attempts"])
         return False
 
     # For web/feishu sources, we can't easily fetch without tools

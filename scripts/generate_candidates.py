@@ -303,10 +303,52 @@ def _fp_for_slot(slot: str, field_pairs: list[dict[str, Any]]) -> dict[str, Any]
     return None
 
 
+def _param_combo_priority(
+    combo: dict[str, Any],
+    param_insights: dict[str, Any] | None,
+) -> tuple[int, float]:
+    """Rank a param combo using lessons.param_insights.
+
+    Returns (tier, -avg_sharpe_sum) where lower sorts first:
+      tier 0 = at least one `prefer` value and no `deprioritize`,
+      tier 1 = neutral / unknown,
+      tier 2 = contains a `deprioritize` value.
+    Within a tier, combos whose values have higher historical avg_sharpe sort
+    first. This lets a later `[:max_candidates]` truncation keep the combos the
+    feedback loop likes and drop the ones it dislikes, instead of cutting blind.
+    """
+    if not param_insights:
+        return (1, 0.0)
+    has_prefer = False
+    has_depri = False
+    sharpe_sum = 0.0
+    for name, val in combo.items():
+        pi = param_insights.get(name)
+        if not isinstance(pi, dict):
+            continue
+        entry = pi.get(str(val))
+        if not isinstance(entry, dict):
+            continue
+        verdict = entry.get("verdict")
+        if verdict == "prefer":
+            has_prefer = True
+        elif verdict == "deprioritize":
+            has_depri = True
+        sharpe_sum += float(entry.get("avg_sharpe", 0.0) or 0.0)
+    if has_depri:
+        tier = 2
+    elif has_prefer:
+        tier = 0
+    else:
+        tier = 1
+    return (tier, -sharpe_sum)
+
+
 def expand_template(
     template: dict[str, Any],
     max_candidates: int = 20,
     validator: FieldValidator | None = None,
+    param_insights: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Expand a template into a list of simulation candidates.
 
@@ -340,6 +382,11 @@ def expand_template(
     param_combos: list[dict[str, Any]] = [{}]
     for key, values in grid_params.items():
         param_combos = [{**combo, key: val} for combo in param_combos for val in values]
+
+    # #5: order combos by lessons.param_insights so a later truncation keeps
+    # the preferred params and drops the deprioritized ones (was blind cut).
+    if param_insights:
+        param_combos.sort(key=lambda c: _param_combo_priority(c, param_insights))
 
     # Identify signal slots: skeleton placeholders that are neither grid/derived
     # params nor direct field_pair keys.

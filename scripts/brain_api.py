@@ -13,7 +13,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
+import statistics
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -125,6 +128,51 @@ def save_alpha_db(db: dict[str, Any]) -> None:
 
 LESSONS_VERSION = 2
 
+# #9: minimum-sample gates before any verdict/action flips away from the
+# neutral default. Below these counts a single lucky/unlucky run could brand a
+# template skip/deprioritize or a param prefer/deprioritize on noise.
+MIN_TESTED_FOR_ACTION = 10   # pattern- and rollup-level action gate
+MIN_COUNT_FOR_VERDICT = 5    # param_insights prefer/deprioritize gate
+
+# #8: multiple-testing correction. Mining tests a huge number of expressions;
+# with N independent trials the BEST in-sample Sharpe is inflated purely by
+# selection (the maximum of N noisy draws). To keep the SUBMIT bar honest we
+# raise the required Sharpe as N grows, by the expected maximum of N standard
+# normals (≈ the "haircut" in Bailey & López de Prado's deflated Sharpe). The
+# effective bar is `sharpe_threshold + MT_PENALTY_SCALE * E[max of N]`, capped
+# so a long campaign can't push the bar to absurd levels. Set scale 0 to
+# disable (env WQ_MT_PENALTY_SCALE).
+MT_PENALTY_SCALE = float(os.getenv("WQ_MT_PENALTY_SCALE", "0.5"))
+MT_PENALTY_CAP = float(os.getenv("WQ_MT_PENALTY_CAP", "1.0"))  # max Sharpe add-on
+
+
+def expected_max_of_n_gaussians(n: int) -> float:
+    """Expected value of the maximum of `n` i.i.d. standard normals.
+
+    Closed-form approximation (Bailey & López de Prado, "The Deflated Sharpe
+    Ratio"): E[max] ≈ (1-γ)·Φ⁻¹(1 - 1/N) + γ·Φ⁻¹(1 - 1/(N·e)), with γ the
+    Euler-Mascheroni constant. Returns 0.0 for N ≤ 1 (a single trial needs no
+    haircut).
+    """
+    if n <= 1:
+        return 0.0
+    gamma = 0.5772156649015329  # Euler–Mascheroni
+    nd = statistics.NormalDist()
+    z1 = nd.inv_cdf(1.0 - 1.0 / n)
+    z2 = nd.inv_cdf(1.0 - 1.0 / (n * math.e))
+    return (1.0 - gamma) * z1 + gamma * z2
+
+
+def multiple_testing_sharpe_penalty(trials: int) -> float:
+    """Sharpe add-on to apply to the SUBMIT threshold for `trials` experiments.
+
+    Scaled by MT_PENALTY_SCALE and clamped to MT_PENALTY_CAP so the bar stays
+    finite over a long campaign.
+    """
+    if trials <= 1 or MT_PENALTY_SCALE <= 0:
+        return 0.0
+    return min(MT_PENALTY_CAP, MT_PENALTY_SCALE * expected_max_of_n_gaussians(trials))
+
 
 def _empty_lessons() -> dict[str, Any]:
     """A fresh, fully-formed v2 lessons document.
@@ -199,6 +247,11 @@ class BrainClient:
         self.session: requests.Session | None = None
         self._429_count = 0
         self._success_streak = 0
+        # #17: _adjust_concurrency runs from worker threads (each GET/POST may
+        # call it on 429/success), all mutating the shared concurrency counters.
+        # Guard every read-modify-write of max_concurrent / streak / 429 count
+        # with a lock so concurrent updates can't corrupt the counters.
+        self._concurrency_lock = threading.Lock()
 
     def connect(self) -> None:
         username, password = load_credentials()
@@ -225,34 +278,45 @@ class BrainClient:
         return self.session
 
     def _adjust_concurrency(self, got_429: bool) -> None:
-        if got_429:
-            self._429_count += 1
-            self._success_streak = 0
-            logger.info(
-                "BRAIN rate limit observed count=%s current_concurrency=%s",
-                self._429_count,
-                self.max_concurrent,
-            )
-            if self.max_concurrent > 1:
-                self.max_concurrent -= 1
-                logger.info("Reducing BRAIN concurrency new_concurrency=%s", self.max_concurrent)
-                print(f"[brain_api] 429 received, concurrency -> {self.max_concurrent}", flush=True)
-        else:
-            self._success_streak += 1
-            self._429_count = 0
-            if self._success_streak >= 10 and self.max_concurrent < 8:
-                self.max_concurrent += 1
+        # #17: serialize the read-modify-write so parallel workers can't race
+        # on the shared counters. Logging/printing is kept inside the lock too
+        # (cheap) so the reported value matches the value just written.
+        with self._concurrency_lock:
+            if got_429:
+                self._429_count += 1
                 self._success_streak = 0
-                logger.info("Increasing BRAIN concurrency new_concurrency=%s", self.max_concurrent)
-                print(f"[brain_api] Success streak, concurrency -> {self.max_concurrent}", flush=True)
+                logger.info(
+                    "BRAIN rate limit observed count=%s current_concurrency=%s",
+                    self._429_count,
+                    self.max_concurrent,
+                )
+                if self.max_concurrent > 1:
+                    self.max_concurrent -= 1
+                    logger.info("Reducing BRAIN concurrency new_concurrency=%s", self.max_concurrent)
+                    print(f"[brain_api] 429 received, concurrency -> {self.max_concurrent}", flush=True)
+            else:
+                self._success_streak += 1
+                self._429_count = 0
+                if self._success_streak >= 10 and self.max_concurrent < 8:
+                    self.max_concurrent += 1
+                    self._success_streak = 0
+                    logger.info("Increasing BRAIN concurrency new_concurrency=%s", self.max_concurrent)
+                    print(f"[brain_api] Success streak, concurrency -> {self.max_concurrent}", flush=True)
 
-    def get_with_retry(self, url: str, retries: int = 3, **kwargs) -> requests.Response:
+    def get_with_retry(self, url: str, retries: int = 3, return_on_rate_limit: bool = False, **kwargs) -> requests.Response:
         s = self._ensure_session()
         for attempt in range(retries):
             try:
                 logger.debug("GET request attempt=%s/%s url=%s", attempt + 1, retries, url)
                 resp = s.get(url, timeout=(10, 60), **kwargs)
                 if resp.status_code == 429:
+                    # When the caller manages its own rate-limit backoff (e.g. the
+                    # polling loop, which must keep 429 waits off its timeout
+                    # budget), hand the 429 response straight back instead of
+                    # sleeping/retrying internally or raising on exhaustion.
+                    if return_on_rate_limit:
+                        self._adjust_concurrency(True)
+                        return resp
                     retry_after = int(resp.headers.get("Retry-After", 5))
                     logger.info("GET rate limited url=%s retry_after=%ss", url, retry_after)
                     time.sleep(retry_after)
@@ -401,8 +465,35 @@ class BrainClient:
         start = time.time()
         logger.info("Polling simulation start sim_id=%s timeout=%ss", sim_id, timeout)
         last_status = None
-        while time.time() - start < timeout:
-            resp = self.get_with_retry(f"{API_BASE}/simulations/{sim_id}")
+        # #18: time spent waiting out 429 rate-limits must NOT eat the polling
+        # budget. We accumulate it here and push the deadline out by the same
+        # amount (capped) so a busy platform can't silently TIMEOUT a sim that
+        # was actually still running. TIMEOUT is non-retryable, so a 429 burning
+        # the budget would discard a real result and waste the fuel.
+        rate_limit_wait = 0.0
+        MAX_RATE_LIMIT_WAIT = 600.0  # safety cap on extra 429 grace time
+        while time.time() - start < timeout + rate_limit_wait:
+            resp = self.get_with_retry(
+                f"{API_BASE}/simulations/{sim_id}", return_on_rate_limit=True
+            )
+            if resp.status_code == 429:
+                # get_with_retry already exhausted its inner Retry-After retries
+                # and the platform is still throttling. Back off explicitly and
+                # credit the wait back to the deadline (not counted as progress).
+                retry_after = 5
+                try:
+                    retry_after = int(resp.headers.get("Retry-After", 5))
+                except (TypeError, ValueError):
+                    retry_after = 5
+                retry_after = max(1, min(retry_after, 60))
+                if rate_limit_wait < MAX_RATE_LIMIT_WAIT:
+                    rate_limit_wait += retry_after
+                logger.info(
+                    "Polling simulation rate-limited sim_id=%s retry_after=%ss rate_limit_wait=%.0fs",
+                    sim_id, retry_after, rate_limit_wait,
+                )
+                time.sleep(retry_after)
+                continue
             if resp.status_code != 200:
                 logger.info("Polling simulation non-200 sim_id=%s status_code=%s", sim_id, resp.status_code)
                 time.sleep(8)
@@ -477,7 +568,11 @@ class BrainClient:
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        concurrency = max_concurrent or self.max_concurrent
+        # #17: snapshot the shared counter under the lock. The pool size is
+        # fixed for this batch; adaptive 429/success adjustments take effect on
+        # the NEXT batch (the executor can't be resized mid-flight).
+        with self._concurrency_lock:
+            concurrency = max_concurrent or self.max_concurrent
         results: list[dict[str, Any]] = []
         logger.info(
             "Batch simulate start candidate_count=%s concurrency=%s max_retries=%s",
@@ -566,7 +661,9 @@ class BrainClient:
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        concurrency = max_concurrent or self.max_concurrent
+        # #17: locked snapshot; pool size fixed per batch (see batch_simulate).
+        with self._concurrency_lock:
+            concurrency = max_concurrent or self.max_concurrent
         logger.info(
             "Batch simulate stream start candidate_count=%s concurrency=%s max_retries=%s",
             len(candidates),
@@ -809,6 +906,7 @@ class BrainClient:
             except Exception as e:
                 logger.info("Fetch alpha PnL exception alpha_id=%s attempt=%s/%s error=%s", alpha_id, attempt + 1, retries + 1, e)
                 if attempt >= retries:
+                    logger.warning("Fetch alpha PnL FAILED (exhausted retries, exception) alpha_id=%s — empty result is a fetch failure, NOT empty data", alpha_id)
                     return []
                 time.sleep(retry_sleep * (attempt + 1))
                 continue
@@ -823,6 +921,7 @@ class BrainClient:
                 len(resp.text or ""),
             )
             if attempt >= retries:
+                logger.warning("Fetch alpha PnL FAILED (exhausted retries, non-200/empty body) alpha_id=%s status_code=%s — empty result is a fetch failure, NOT empty data", alpha_id, resp.status_code)
                 return []
             time.sleep(retry_sleep * (attempt + 1))
 
@@ -843,18 +942,34 @@ class BrainClient:
 
         schema = data.get("schema", {})
         props = schema.get("properties", [])
+        # #13: locate the pnl column by name; do NOT silently default to column
+        # index 1. A schema with no recognizable pnl column means we'd be
+        # reading an arbitrary numeric column as PnL (wrong correlations / wrong
+        # quality verdicts). Treat that as a parse failure and return [].
+        _PNL_NAMES = ("pnl", "cum_pnl", "returns", "ret")
         if isinstance(props, list):
             date_idx = next((i for i, p in enumerate(props) if p.get("name", "").lower() == "date"), 0)
             pnl_idx = next(
-                (i for i, p in enumerate(props) if p.get("name", "").lower() in ("pnl", "cum_pnl", "returns", "ret")),
-                1,
+                (i for i, p in enumerate(props) if p.get("name", "").lower() in _PNL_NAMES),
+                None,
             )
+            col_names = [p.get("name") for p in props]
         else:
             date_idx = next((v["index"] for k, v in props.items() if k.lower() == "date"), 0)
             pnl_idx = next(
-                (v["index"] for k, v in props.items() if k.lower() in ("pnl", "cum_pnl", "returns", "ret")),
-                1,
+                (v["index"] for k, v in props.items() if k.lower() in _PNL_NAMES),
+                None,
             )
+            col_names = list(props.keys())
+
+        if pnl_idx is None:
+            logger.warning(
+                "Fetch alpha PnL: no recognizable pnl column in schema alpha_id=%s columns=%s — "
+                "refusing to default to column 1 (#13); returning empty",
+                alpha_id,
+                col_names,
+            )
+            return []
 
         records = sorted(data.get("records", []), key=lambda r: r[date_idx])
         out: list[float] = []
@@ -865,7 +980,112 @@ class BrainClient:
             except Exception:
                 continue
         logger.info("Fetched alpha PnL alpha_id=%s raw_records=%s parsed_records=%s", alpha_id, len(records), len(out))
+        if not out:
+            # 200 OK but no usable rows: genuinely-empty data, distinct from the
+            # fetch-failure paths above (which warn). Callers see [] either way,
+            # but the logs now disambiguate the two cases.
+            logger.info("Fetch alpha PnL returned 200 with zero usable PnL points alpha_id=%s raw_records=%s — empty DATA, not a fetch failure", alpha_id, len(records))
         return out
+
+    def fetch_self_correlation(
+        self, alpha_id: str, retries: int = 6, retry_sleep: float = 2.5
+    ) -> float | None:
+        """Fetch the alpha's max self-correlation from BRAIN's authoritative
+        correlation endpoint (#11).
+
+        `GET /alphas/{id}/correlations/self` returns the correlation of this
+        alpha against every alpha already in the user's pool, computed by the
+        platform on full daily-return series — i.e. the same number the
+        platform's SELF_CORRELATION submission check uses. This replaces the
+        local PnL-tail `compute_correlation`, which only saw the alphas we had
+        cached PnL for and aligned on a fragile common tail.
+
+        Behaviour:
+          * The endpoint computes asynchronously: it returns 200 with an EMPTY
+            body while still crunching, so we poll (empty body -> sleep+retry).
+          * Returns the maximum absolute correlation across all records, or
+            0.0 when the pool is empty (no records -> nothing to be correlated
+            with). Returns None ONLY on a genuine fetch failure (exhausted
+            retries / parse error), so the caller can fall back to the local
+            estimate rather than mistaking a failure for "uncorrelated".
+        """
+        logger.info("Fetching self-correlation alpha_id=%s retries=%s", alpha_id, retries)
+        resp: requests.Response | None = None
+        for attempt in range(retries + 1):
+            try:
+                resp = self.get_with_retry(f"{API_BASE}/alphas/{alpha_id}/correlations/self")
+            except Exception as e:
+                logger.info("Fetch self-correlation exception alpha_id=%s attempt=%s/%s error=%s", alpha_id, attempt + 1, retries + 1, e)
+                if attempt >= retries:
+                    logger.warning("Fetch self-correlation FAILED (exhausted retries, exception) alpha_id=%s", alpha_id)
+                    return None
+                time.sleep(retry_sleep * (attempt + 1))
+                continue
+            # Platform still computing -> 200 with empty body. Keep polling.
+            if resp.status_code == 200 and resp.text.strip():
+                break
+            logger.info(
+                "Fetch self-correlation pending/non-200 alpha_id=%s attempt=%s/%s status_code=%s text_chars=%s",
+                alpha_id, attempt + 1, retries + 1, resp.status_code, len(resp.text or ""),
+            )
+            if attempt >= retries:
+                logger.warning("Fetch self-correlation FAILED (exhausted retries, non-200/empty) alpha_id=%s status_code=%s", alpha_id, resp.status_code)
+                return None
+            time.sleep(retry_sleep * (attempt + 1))
+
+        if resp is None:
+            return None
+        try:
+            data = resp.json()
+        except Exception as e:
+            logger.info("Fetch self-correlation JSON parse failed alpha_id=%s error=%s body_hash=%s", alpha_id, e, _text_fingerprint(resp.text or ""))
+            return None
+
+        records = data.get("records", [])
+        if not records:
+            # Empty pool: there is nothing to correlate against, so the alpha is
+            # trivially uncorrelated. This is a real answer, not a failure.
+            logger.info("Self-correlation: empty records alpha_id=%s — treating as uncorrelated (0.0)", alpha_id)
+            return 0.0
+
+        # Locate the correlation column by schema name; do NOT hard-code an index
+        # (same discipline as #13's pnl-column fix). Fall back to scanning every
+        # numeric field per record only if the schema is unusable.
+        schema = data.get("schema", {})
+        props = schema.get("properties", [])
+        corr_idx: int | None = None
+        _CORR_NAMES = ("correlation", "corr", "max", "value")
+        if isinstance(props, list) and props:
+            corr_idx = next((i for i, p in enumerate(props) if str(p.get("name", "")).lower() in _CORR_NAMES), None)
+        elif isinstance(props, dict) and props:
+            corr_idx = next((v.get("index") for k, v in props.items() if k.lower() in _CORR_NAMES), None)
+
+        max_abs = 0.0
+        found = False
+        for rec in records:
+            row = rec[0] if isinstance(rec, list) and len(rec) == 1 and isinstance(rec[0], list) else rec
+            if not isinstance(row, (list, tuple)):
+                continue
+            if corr_idx is not None and corr_idx < len(row):
+                vals = [row[corr_idx]]
+            else:
+                # No recognizable schema column: consider every numeric cell in
+                # [-1, 1] a correlation candidate (correlations are bounded).
+                vals = [c for c in row if isinstance(c, (int, float)) and -1.0 <= c <= 1.0]
+            for v in vals:
+                try:
+                    fv = abs(float(v))
+                except (TypeError, ValueError):
+                    continue
+                if fv <= 1.0:
+                    max_abs = max(max_abs, fv)
+                    found = True
+
+        if not found:
+            logger.warning("Self-correlation: no usable correlation value parsed alpha_id=%s schema_cols=%s", alpha_id, [p.get("name") for p in props] if isinstance(props, list) else list(props))
+            return None
+        logger.info("Self-correlation fetched alpha_id=%s max_abs_corr=%s records=%s", alpha_id, max_abs, len(records))
+        return max_abs
 
     def submit_alpha(self, alpha_id: str) -> dict[str, Any]:
         """Submit alpha and poll for result."""
@@ -984,6 +1204,33 @@ def compute_correlation(
     return results
 
 
+# BRAIN returns these robustness checks inside every regular simulation's
+# `is.checks` block (no OS / extra simulation needed). A FAIL on any of them
+# means the alpha is IS-strong but fragile (overfit to the full universe /
+# concentrated in a few names) — exactly the out-of-sample-robustness signal
+# that BUGS #6 is about. We use the platform's verdict directly.
+ROBUSTNESS_CHECK_NAMES = ("LOW_SUB_UNIVERSE_SHARPE", "CONCENTRATED_WEIGHT")
+
+
+def failed_robustness_checks(checks: list | None) -> list[str]:
+    """Return the names of robustness checks the alpha FAILED.
+
+    `checks` is the BRAIN `is.checks` list: [{"name", "result", "limit", "value"}].
+    A missing/None checks list (e.g. older runtime artifacts) yields [] so the
+    caller's behavior is unchanged — robustness gating only kicks in when the
+    platform actually reported the checks.
+    """
+    if not isinstance(checks, list):
+        return []
+    failed: list[str] = []
+    for c in checks:
+        if not isinstance(c, dict):
+            continue
+        if c.get("name") in ROBUSTNESS_CHECK_NAMES and c.get("result") == "FAIL":
+            failed.append(c["name"])
+    return failed
+
+
 def quality_filter(
     sharpe: float | None,
     fitness: float | None,
@@ -994,8 +1241,25 @@ def quality_filter(
     fitness_threshold: float = 1.0,
     turnover_threshold: float = 0.7,
     corr_threshold: float = 0.7,
+    checks: list | None = None,
+    trials: int | None = None,
 ) -> str:
-    """Classify a simulation result into SUBMIT / OBSERVE / DISCARD."""
+    """Classify a simulation result into SUBMIT / OBSERVE / DISCARD.
+
+    #6 robustness gate: a candidate that clears the IS thresholds for SUBMIT is
+    demoted to OBSERVE if BRAIN's own robustness checks (sub-universe Sharpe /
+    concentrated weight) FAIL — i.e. it looks good on the full universe but is
+    not robust. This uses the platform-reported checks directly; when `checks`
+    is absent the gate is a no-op (backward compatible).
+
+    #8 multiple-testing correction: when `trials` (the number of expressions
+    tested so far this campaign) is given, the SUBMIT Sharpe bar is raised by
+    `multiple_testing_sharpe_penalty(trials)` to offset selection bias — the
+    best of many noisy backtests is inflated, so a fixed 1.5 bar lets more and
+    more false positives through as the campaign grows. A candidate that clears
+    the *base* bar but not the inflated bar is demoted to OBSERVE (kept, not
+    submitted). `trials=None` disables the correction (backward compatible).
+    """
     if sharpe is None or fitness is None:
         return "DISCARD"
 
@@ -1005,8 +1269,22 @@ def quality_filter(
     if max_corr is not None and abs(max_corr) >= corr_threshold:
         return "DISCARD"
 
-    if sharpe >= sharpe_threshold and fitness >= fitness_threshold:
+    effective_sharpe_threshold = sharpe_threshold
+    if trials is not None:
+        effective_sharpe_threshold += multiple_testing_sharpe_penalty(trials)
+
+    if sharpe >= effective_sharpe_threshold and fitness >= fitness_threshold:
+        # Strong in-sample — but only SUBMIT if the platform's robustness
+        # checks also pass; otherwise hold it at OBSERVE (do not auto-submit
+        # a likely-overfit / fragile alpha).
+        if failed_robustness_checks(checks):
+            return "OBSERVE"
         return "SUBMIT"
+
+    # #8: cleared the base SUBMIT bar but not the multiple-testing-inflated one
+    # — promising enough to keep watching, not strong enough to auto-submit.
+    if sharpe >= sharpe_threshold and fitness >= fitness_threshold:
+        return "OBSERVE"
 
     if sharpe >= 1.0 or fitness >= 0.8:
         return "OBSERVE"
@@ -1129,7 +1407,8 @@ def _apply_to_rollup(roll: dict[str, Any], exp: dict[str, Any]) -> None:
 def _finalize_rollup_action(roll: dict[str, Any]) -> None:
     """Derive a consume-side action once a bucket has enough evidence."""
     tested = roll["tested"]
-    if tested < 5:
+    # #9: same minimum-sample gate as the pattern-level action.
+    if tested < MIN_TESTED_FOR_ACTION:
         roll["action"] = "explore"
         return
     pass_rate = (roll["submit"] + roll["observe"]) / tested if tested else 0.0
@@ -1188,20 +1467,20 @@ def update_lessons_from_result(
         return
     sim_data = sim_result.get("sim_data", {})
     is_data = sim_data.get("is", {}) if isinstance(sim_data, dict) else {}
-    if not is_data:
-        # Try alpha data directly
-        is_data = sim_data.get("is", {}) if sim_data else {}
 
     sharpe = is_data.get("sharpe")
     fitness = is_data.get("fitness")
     turnover = is_data.get("turnover")
+    # #6: BRAIN's robustness checks ride along in the same is.checks block.
+    checks = is_data.get("checks") if isinstance(is_data, dict) else None
+    failed_robustness = failed_robustness_checks(checks)
 
     # Ensure pattern exists
     patterns = lessons.setdefault("patterns", {})
     if template_id not in patterns:
         patterns[template_id] = {
             "description": f"Template: {template_id}",
-            "tested": 0, "passed": 0, "pass_rate": 0.0,
+            "tested": 0, "passed": 0, "observed": 0, "pass_rate": 0.0,
             "avg_sharpe": 0.0, "avg_fitness": 0.0,
             "sharpe_count": 0, "fitness_count": 0, "sim_errors": 0,
             "best": None, "failure_modes": {}, "action": "expand",
@@ -1213,14 +1492,26 @@ def update_lessons_from_result(
     p.setdefault("sharpe_count", 0)
     p.setdefault("fitness_count", 0)
     p.setdefault("sim_errors", 0)
+    p.setdefault("observed", 0)
     p["tested"] += 1
 
-    # Determine pass/fail
-    action = quality_filter(sharpe, fitness, turnover, max_corr)
+    # Determine pass/fail. #14: OBSERVE (near-misses) are tracked separately so
+    # promising templates aren't statistically killed by counting them as plain
+    # failures. `passed` stays strict (SUBMIT only) for backward compatibility;
+    # `observed` feeds a weighted pass_rate that gives OBSERVE half credit.
+    action = quality_filter(sharpe, fitness, turnover, max_corr, checks=checks, trials=len(lessons.get("experiments", [])))
     passed = action == "SUBMIT"
 
     if passed:
         p["passed"] += 1
+    elif action == "OBSERVE":
+        p["observed"] += 1
+        # #6: a SUBMIT-grade IS result demoted to OBSERVE purely because it
+        # failed robustness checks is a distinct, useful signal — record it.
+        if failed_robustness and sharpe is not None and fitness is not None \
+                and sharpe >= 1.5 and fitness >= 1.0:
+            fm = p.setdefault("failure_modes", {})
+            fm["ROBUSTNESS_FAIL"] = fm.get("ROBUSTNESS_FAIL", 0) + 1
     else:
         # Record failure mode
         if sharpe is None:
@@ -1261,6 +1552,12 @@ def update_lessons_from_result(
             p["avg_fitness"] = fitness
 
     p["pass_rate"] = p["passed"] / p["tested"] if p["tested"] > 0 else 0.0
+    # Weighted rate gives OBSERVE half credit so near-misses keep a template
+    # alive (drives the action gate below; pass_rate stays strict for reporting).
+    weighted_rate = (
+        (p["passed"] + 0.5 * p.get("observed", 0)) / p["tested"]
+        if p["tested"] > 0 else 0.0
+    )
 
     # Update best
     if sharpe is not None:
@@ -1272,11 +1569,13 @@ def update_lessons_from_result(
                 "expr": candidate.get("expression", ""),
             }
 
-    # Auto-update action based on pass rate
-    if p["tested"] >= 5:
-        if p["pass_rate"] == 0.0:
+    # Auto-update action based on weighted pass rate (incl. OBSERVE credit).
+    # #9: require a minimum sample before flipping action — a verdict off 2-3
+    # runs is noise. Below the gate the template stays at its default action.
+    if p["tested"] >= MIN_TESTED_FOR_ACTION:
+        if weighted_rate == 0.0:
             p["action"] = "skip"
-        elif p["pass_rate"] < 0.2:
+        elif weighted_rate < 0.2:
             p["action"] = "deprioritize"
         else:
             p["action"] = "expand"
@@ -1300,7 +1599,7 @@ def update_lessons_from_result(
                 entry["avg_sharpe"] = (entry["avg_sharpe"] * old_count + sharpe) / entry["sharpe_count"]
             else:
                 entry["avg_sharpe"] = sharpe
-            if entry["sharpe_count"] >= 3:
+            if entry["sharpe_count"] >= MIN_COUNT_FOR_VERDICT:
                 if entry["avg_sharpe"] >= 1.5:
                     entry["verdict"] = "prefer"
                 elif entry["avg_sharpe"] < 0.8:
@@ -1329,6 +1628,7 @@ def update_lessons_from_result(
         },
         "is": {"sharpe": sharpe, "fitness": fitness, "turnover": turnover},
         "max_corr": max_corr,
+        "robustness_failed": failed_robustness,
         "verdict": action,
         "failure_mode": _verdict_to_failure_mode(action, sharpe, fitness, turnover, max_corr),
     }
