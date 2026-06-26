@@ -6,6 +6,7 @@ alpha101_results.json
 alpha101_v2_results.json
 mining_state.json
 mining_report.json
+lessons.json
 depth_request.json
 depth_response.json
 llm_request.json

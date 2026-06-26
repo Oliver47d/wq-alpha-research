@@ -46,6 +46,9 @@ from typing import Any
 from generate_candidates import (  # noqa: E402
     FieldValidator,
     deduplicate,
+    KNOWN_OPERATORS,
+    PRICE_VOLUME_BUILTINS as _PV_BUILTINS,
+    GROUP_BUILTINS as _GROUP_BUILTINS,
 )
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -67,30 +70,12 @@ DEFAULT_SETTINGS = {
 }
 
 # --------------------------------------------------------------------------- #
-# FASTEXPR knowledge: operators and price/volume builtins.
-# Kept intentionally small + explicit; extend as needed.
+# FASTEXPR knowledge. KNOWN_OPERATORS is imported from generate_candidates so
+# the template grid, the structure fingerprint, and this LLM validator can never
+# drift apart. Price/volume builtins here also fold in the group builtins
+# (industry/subindustry/...) since both are valid bare tokens for validation.
 # --------------------------------------------------------------------------- #
-KNOWN_OPERATORS = {
-    # cross-sectional
-    "rank", "group_rank", "group_mean", "group_neutralize", "group_zscore",
-    "zscore", "scale", "winsorize", "normalize", "quantile",
-    # time-series
-    "ts_rank", "ts_mean", "ts_std_dev", "ts_delta", "ts_delay", "ts_sum",
-    "ts_max", "ts_min", "ts_corr", "ts_covariance", "ts_regression",
-    "ts_decay_linear", "ts_count", "ts_zscore", "ts_product", "ts_argmax",
-    "ts_argmin", "ts_scale",
-    # arithmetic / logic
-    "abs", "log", "sign", "power", "sqrt", "max", "min", "if_else",
-    "add", "subtract", "multiply", "divide",
-}
-
-# Price/volume + grouping builtins that are valid tokens but are NOT in the
-# data-field reference (which only lists fundamental/analyst/etc. fields).
-PRICE_VOLUME_BUILTINS = {
-    "close", "open", "high", "low", "vwap", "volume", "returns", "cap",
-    "sharesout", "adv20", "adv60", "adv120",
-    "industry", "subindustry", "sector", "market",
-}
+PRICE_VOLUME_BUILTINS = _PV_BUILTINS | _GROUP_BUILTINS
 
 # Numeric-literal / noise tokens to skip during field validation.
 SKIP_TOKENS = KNOWN_OPERATORS | PRICE_VOLUME_BUILTINS | {
@@ -201,31 +186,96 @@ def _field_menu(fv: FieldValidator, limit: int = 60) -> list[str]:
     return fv.field_list[:limit]
 
 
+def _structure_guidance(lessons: dict[str, Any]) -> dict[str, Any]:
+    """Distill v2 rollups into positive/negative structural examples for the LLM.
+
+    The append-only experiment log aggregates into rollups by structure
+    (ast_hash), data category (field_class), and decay. We surface:
+      * winners        — structures with a SUBMIT/OBSERVE pass, ranked by sharpe.
+      * avoid          — structures with enough evidence and zero passes
+                         (action 'skip') or low pass-rate ('deprioritize').
+      * field_classes  — per-category pass tallies so the LLM leans toward
+                         categories that have produced edge.
+    Empty when there are no rollups yet (cold start), so the prompt degrades
+    gracefully to the original behavior.
+    """
+    rollups = lessons.get("rollups", {})
+    by_ast = rollups.get("by_ast", {})
+    by_fc = rollups.get("by_field_class", {})
+
+    winners = []
+    avoid = []
+    for ast, r in by_ast.items():
+        entry = {
+            "ast_hash": ast,
+            "ops": r.get("ops", []),
+            "field_classes": r.get("field_classes", []),
+            "tested": r.get("tested", 0),
+            "avg_sharpe": round(r.get("avg_sharpe", 0.0), 3),
+            "best_sharpe": r.get("best_sharpe"),
+            "examples": r.get("examples", [])[:2],
+        }
+        if (r.get("submit", 0) + r.get("observe", 0)) > 0:
+            winners.append(entry)
+        elif r.get("action") in ("skip", "deprioritize"):
+            entry["failure_modes"] = r.get("failure_modes", {})
+            avoid.append(entry)
+    winners.sort(key=lambda e: (e["best_sharpe"] or 0), reverse=True)
+    avoid.sort(key=lambda e: e["tested"], reverse=True)
+
+    field_classes = {
+        fc: {
+            "tested": r.get("tested", 0),
+            "passes": r.get("submit", 0) + r.get("observe", 0),
+            "avg_sharpe": round(r.get("avg_sharpe", 0.0), 3),
+        }
+        for fc, r in by_fc.items()
+    }
+    return {
+        "winning_structures": winners[:5],
+        "avoid_structures": avoid[:5],
+        "field_class_performance": field_classes,
+    }
+
+
 def build_generation_request(
     lessons: dict[str, Any],
     n: int = 8,
     fields_path: Path | None = None,
 ) -> dict[str, Any]:
     fv = FieldValidator(fields_path or FIELDS_PATH)
+    guidance = _structure_guidance(lessons)
+    rules = [
+        "Each expression must be valid FASTEXPR for USA TOP3000, delay 1.",
+        f"Use ONLY these operators: {sorted(KNOWN_OPERATORS)}.",
+        "Fields must come from price/volume builtins or fields_menu (full list in references).",
+        f"Price/volume builtins: {sorted(PRICE_VOLUME_BUILTINS)}.",
+        "Prefer cross-sectional neutralization (rank/group_rank) for stationarity.",
+        "Use plain decimals for small constants (e.g. 0.000001), NOT scientific notation like 1e-6 — BRAIN's parser rejects it.",
+        "Avoid reusing concepts marked 'deprioritize' in lessons_summary.",
+    ]
+    if guidance["winning_structures"]:
+        rules.append(
+            "Build on 'winning_structures' in structure_guidance (these have shown "
+            "edge): reuse their operator/field-class shape with NEW fields or windows."
+        )
+    if guidance["avoid_structures"]:
+        rules.append(
+            "Do NOT reproduce any structure in 'avoid_structures' (tested with no "
+            "edge); their ast_hash/ops are dead ends."
+        )
     return {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "task": "Generate WorldQuant BRAIN FASTEXPR alpha expressions directly (no templates).",
         "n_requested": n,
-        "rules": [
-            "Each expression must be valid FASTEXPR for USA TOP3000, delay 1.",
-            f"Use ONLY these operators: {sorted(KNOWN_OPERATORS)}.",
-            "Fields must come from price/volume builtins or fields_menu (full list in references).",
-            f"Price/volume builtins: {sorted(PRICE_VOLUME_BUILTINS)}.",
-            "Prefer cross-sectional neutralization (rank/group_rank) for stationarity.",
-            "Use plain decimals for small constants (e.g. 0.000001), NOT scientific notation like 1e-6 — BRAIN's parser rejects it.",
-            "Avoid reusing concepts marked 'deprioritize' in lessons_summary.",
-        ],
+        "rules": rules,
         "fields_menu_sample": _field_menu(fv),
         "fields_reference_path": str(fields_path or FIELDS_PATH),
         "lessons_summary": {
             "concepts": lessons.get("concepts", lessons.get("patterns", {})),
             "param_insights": lessons.get("param_insights", {}),
         },
+        "structure_guidance": guidance,
         "response_contract": {
             "write_to": "llm_response.json",
             "schema": {

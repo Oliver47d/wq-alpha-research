@@ -49,6 +49,7 @@ from generate_candidates import (  # noqa: E402
     deduplicate,
     expand_template,
     load_templates,
+    structure_fingerprint,
 )
 from llm_producer import (  # noqa: E402
     build_generation_request,
@@ -294,14 +295,35 @@ def build_candidates_llm(lessons: dict) -> list[dict]:
     for r in rejected:
         logger.info("LLM candidate rejected expr=%r errors=%s", str(r.get("expression"))[:80], r.get("errors"))
 
-    # Honor lessons concept-level skip actions (LLM uses concept_id as the key).
+    # Honor lessons actions. Two gates:
+    #   1. v2 structure rollups (by_ast): the primary signal — aggregates across
+    #      both producers by *idea* (windows/fields swapped still share ast_hash).
+    #   2. legacy concept-level patterns (concept_id) for backward compatibility.
     patterns = lessons.get("patterns", {})
+    by_ast = lessons.get("rollups", {}).get("by_ast", {})
+    fcats = FieldValidator(FIELDS_PATH).field_categories
     kept: list[dict] = []
     for c in cands:
         cid = c.get("concept_id", c.get("template_id"))
+        expr = c.get("expression", "")
+        ast = None
+        try:
+            ast = structure_fingerprint(expr, fcats)["ast_hash"]
+        except Exception:
+            ast = None
+        roll = by_ast.get(ast, {}) if ast else {}
+        if roll.get("action") == "skip":
+            logger.info(
+                "LLM candidate skipped by rollup ast_hash=%s tested=%s submit=%s observe=%s",
+                ast, roll.get("tested"), roll.get("submit"), roll.get("observe"),
+            )
+            print(f"  [skip] structure {ast} (tested={roll.get('tested')}, no passes)")
+            continue
         if patterns.get(cid, {}).get("action") == "skip":
             logger.info("LLM candidate skipped by lessons concept_id=%s", cid)
             continue
+        if ast:
+            c["ast_hash"] = ast
         kept.append(c)
 
     if len(kept) > MAX_CANDIDATES_PER_ROUND:

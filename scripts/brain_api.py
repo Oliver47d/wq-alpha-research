@@ -23,6 +23,17 @@ import numpy as np
 import requests
 from requests.auth import HTTPBasicAuth
 
+# Structure fingerprint is the v2 lessons aggregation key. Defined in
+# generate_candidates (the lower-level producer module) so both the template
+# grid and the LLM path share one key space. generate_candidates does NOT
+# import brain_api, so this import is safe (no cycle).
+try:
+    from generate_candidates import structure_fingerprint, FieldValidator, FIELDS_PATH as _FIELDS_PATH
+except Exception:  # pragma: no cover - keeps brain_api importable in isolation
+    structure_fingerprint = None  # type: ignore
+    FieldValidator = None  # type: ignore
+    _FIELDS_PATH = None  # type: ignore
+
 # --------------------------------------------------------------------------- #
 # Config
 # --------------------------------------------------------------------------- #
@@ -112,13 +123,63 @@ def save_alpha_db(db: dict[str, Any]) -> None:
     logger.info("Saved alpha DB path=%s alpha_count=%s", ALPHA_DB_PATH, len(db.get("alphas", {})))
 
 
+LESSONS_VERSION = 2
+
+
+def _empty_lessons() -> dict[str, Any]:
+    """A fresh, fully-formed v2 lessons document.
+
+    v2 is a *superset* of v1: the v1 concept/template aggregates (`patterns`,
+    `param_insights`) are retained (still consumed by the skip logic and the LLM
+    prompt), and two new structures are added:
+
+      * experiments — append-only list of raw simulation facts (one per result).
+        This is the actual "past-experience log": immutable evidence, never
+        rewritten, that any future analysis can re-aggregate from scratch.
+      * rollups     — a *derived cache* keyed by structure (ast_hash), data
+        category (field_class), and decay. Recomputable from `experiments` at
+        any time; kept inline so consumers don't have to re-scan every round.
+    """
+    return {
+        "patterns": {},
+        "param_insights": {},
+        "experiments": [],
+        "rollups": {"by_ast": {}, "by_field_class": {}, "by_decay": {}},
+        "version": LESSONS_VERSION,
+    }
+
+
+def _migrate_lessons(lessons: dict[str, Any]) -> dict[str, Any]:
+    """Bring any older/partial lessons doc up to the v2 shape, in place.
+
+    Backward compatible: a v1 file (or the canonical empty
+    {"patterns": {}, "param_insights": {}, "version": 1}) simply gains the new
+    `experiments`/`rollups` keys; nothing existing is dropped or rewritten.
+    """
+    lessons.setdefault("patterns", {})
+    lessons.setdefault("param_insights", {})
+    lessons.setdefault("experiments", [])
+    rollups = lessons.setdefault("rollups", {})
+    rollups.setdefault("by_ast", {})
+    rollups.setdefault("by_field_class", {})
+    rollups.setdefault("by_decay", {})
+    lessons["version"] = LESSONS_VERSION
+    return lessons
+
+
 def load_lessons() -> dict[str, Any]:
     if LESSONS_PATH.exists():
         lessons = json.loads(LESSONS_PATH.read_text(encoding="utf-8"))
-        logger.info("Loaded lessons path=%s pattern_count=%s", LESSONS_PATH, len(lessons.get("patterns", {})))
+        prev_version = lessons.get("version")
+        lessons = _migrate_lessons(lessons)
+        logger.info(
+            "Loaded lessons path=%s version=%s->%s pattern_count=%s experiment_count=%s",
+            LESSONS_PATH, prev_version, lessons["version"],
+            len(lessons.get("patterns", {})), len(lessons.get("experiments", [])),
+        )
         return lessons
     logger.info("Lessons not found; initializing empty lessons path=%s", LESSONS_PATH)
-    return {"patterns": {}, "param_insights": {}, "version": 1}
+    return _empty_lessons()
 
 
 def save_lessons(lessons: dict[str, Any]) -> None:
@@ -351,9 +412,18 @@ class BrainClient:
             if status != last_status:
                 logger.info("Polling simulation status changed sim_id=%s status=%s", sim_id, status)
                 last_status = status
-            if status == "COMPLETE":
+            # COMPLETE and WARNING are both terminal SUCCESS states: the
+            # simulation finished and produced an alpha record. WARNING only
+            # flags non-fatal advisories (e.g. low coverage / high turnover);
+            # the metrics are still real and the alpha is fetchable. Treating
+            # WARNING as non-terminal made the loop spin until timeout and the
+            # result was silently lost — handle it exactly like COMPLETE.
+            if status in ("COMPLETE", "WARNING"):
                 alpha_id = data.get("alpha", "")
-                logger.info("Polling simulation complete sim_id=%s alpha_id=%s", sim_id, alpha_id)
+                logger.info(
+                    "Polling simulation terminal sim_id=%s status=%s alpha_id=%s",
+                    sim_id, status, alpha_id,
+                )
                 return {"status": "COMPLETE", "alpha_id": alpha_id, "sim_data": data}
             if status in ("ERROR", "FAILED"):
                 logger.info(
@@ -956,6 +1026,151 @@ def _extract_params(candidate: dict) -> dict[str, str]:
     return params
 
 
+_FIELD_VALIDATOR_CACHE: Any = None
+
+
+def _get_field_categories() -> dict[str, str]:
+    """Lazily build (once) the field-id -> data-category map used to classify
+    expression fields into field_classes. Empty dict if unavailable."""
+    global _FIELD_VALIDATOR_CACHE
+    if _FIELD_VALIDATOR_CACHE is None:
+        if FieldValidator is None or _FIELDS_PATH is None:
+            _FIELD_VALIDATOR_CACHE = {}
+        else:
+            try:
+                _FIELD_VALIDATOR_CACHE = FieldValidator(_FIELDS_PATH).field_categories
+            except Exception:
+                _FIELD_VALIDATOR_CACHE = {}
+    return _FIELD_VALIDATOR_CACHE
+
+
+def _fingerprint_candidate(candidate: dict) -> dict[str, Any]:
+    """Structure fingerprint for a candidate, robust to missing infra.
+
+    Falls back to a minimal shape (concept_id as ast_hash) when
+    structure_fingerprint is unavailable so the write path never crashes.
+    """
+    expr = candidate.get("expression", "")
+    if isinstance(expr, dict):  # remote alpha records store {"code": ...}
+        expr = expr.get("code") or ""
+    expr = str(expr)
+    if structure_fingerprint is not None and expr:
+        try:
+            return structure_fingerprint(expr, _get_field_categories())
+        except Exception:
+            pass
+    cid = candidate.get("concept_id") or candidate.get("template_id") or "unknown"
+    return {"ast_hash": str(cid), "ops": [], "fields": [], "field_classes": [], "depth": 0}
+
+
+def _verdict_to_failure_mode(
+    verdict: str,
+    sharpe: float | None,
+    fitness: float | None,
+    turnover: float | None,
+    max_corr: float | None,
+) -> str | None:
+    """Classify why a non-SUBMIT result fell short (None for SUBMIT)."""
+    if verdict == "SUBMIT":
+        return None
+    if sharpe is None:
+        return "SIM_ERROR"
+    if turnover is not None and turnover > 0.7:
+        return "HIGH_TURNOVER"
+    if max_corr is not None and abs(max_corr) >= 0.7:
+        return "HIGH_CORR"
+    if sharpe < 1.0:
+        return "LOW_SHARPE"
+    if fitness is not None and fitness < 1.0:
+        return "LOW_FITNESS"
+    return "OTHER"
+
+
+def _new_rollup() -> dict[str, Any]:
+    return {
+        "tested": 0, "submit": 0, "observe": 0, "discard": 0,
+        "sharpe_count": 0, "sum_sharpe": 0.0, "avg_sharpe": 0.0,
+        "best_sharpe": None, "failure_modes": {}, "action": "explore",
+        "ops": [], "field_classes": [], "examples": [],
+    }
+
+
+def _apply_to_rollup(roll: dict[str, Any], exp: dict[str, Any]) -> None:
+    """Fold a single experiment record into a rollup bucket (in place)."""
+    roll["tested"] += 1
+    verdict = exp.get("verdict")
+    if verdict == "SUBMIT":
+        roll["submit"] += 1
+    elif verdict == "OBSERVE":
+        roll["observe"] += 1
+    else:
+        roll["discard"] += 1
+    sharpe = (exp.get("is") or {}).get("sharpe")
+    if sharpe is not None:
+        roll["sharpe_count"] += 1
+        roll["sum_sharpe"] += sharpe
+        roll["avg_sharpe"] = roll["sum_sharpe"] / roll["sharpe_count"]
+        if roll["best_sharpe"] is None or sharpe > roll["best_sharpe"]:
+            roll["best_sharpe"] = sharpe
+    fm = exp.get("failure_mode")
+    if fm:
+        roll["failure_modes"][fm] = roll["failure_modes"].get(fm, 0) + 1
+    # Union of structural metadata for human readability.
+    if exp.get("ops"):
+        roll["ops"] = sorted(set(roll["ops"]) | set(exp["ops"]))
+    if exp.get("field_classes"):
+        roll["field_classes"] = sorted(set(roll["field_classes"]) | set(exp["field_classes"]))
+    # Keep a few example expressions for the LLM prompt / debugging.
+    ex = exp.get("expr")
+    if ex and ex not in roll["examples"] and len(roll["examples"]) < 3:
+        roll["examples"].append(ex)
+
+
+def _finalize_rollup_action(roll: dict[str, Any]) -> None:
+    """Derive a consume-side action once a bucket has enough evidence."""
+    tested = roll["tested"]
+    if tested < 5:
+        roll["action"] = "explore"
+        return
+    pass_rate = (roll["submit"] + roll["observe"]) / tested if tested else 0.0
+    if roll["submit"] == 0 and roll["observe"] == 0:
+        roll["action"] = "skip"
+    elif pass_rate < 0.2:
+        roll["action"] = "deprioritize"
+    else:
+        roll["action"] = "explore"
+
+
+def recompute_rollups(lessons: dict[str, Any]) -> dict[str, Any]:
+    """Rebuild the derived `rollups` cache from the append-only `experiments`.
+
+    rollups is ALWAYS exactly derived(experiments) — this is the single function
+    that establishes that invariant. Called after every append; can also be run
+    standalone to repair the cache. Buckets: by_ast (structure), by_field_class
+    (data category), by_decay (the main tunable param).
+    """
+    by_ast: dict[str, Any] = {}
+    by_fc: dict[str, Any] = {}
+    by_decay: dict[str, Any] = {}
+    for exp in lessons.get("experiments", []):
+        ast = exp.get("ast_hash")
+        if ast:
+            _apply_to_rollup(by_ast.setdefault(ast, _new_rollup()), exp)
+        for fc in exp.get("field_classes", []) or []:
+            _apply_to_rollup(by_fc.setdefault(fc, _new_rollup()), exp)
+        decay = (exp.get("settings") or {}).get("decay")
+        if decay is not None:
+            _apply_to_rollup(by_decay.setdefault(str(decay), _new_rollup()), exp)
+    for roll in by_ast.values():
+        _finalize_rollup_action(roll)
+    for roll in by_fc.values():
+        _finalize_rollup_action(roll)
+    for roll in by_decay.values():
+        _finalize_rollup_action(roll)
+    lessons["rollups"] = {"by_ast": by_ast, "by_field_class": by_fc, "by_decay": by_decay}
+    return lessons["rollups"]
+
+
 def update_lessons_from_result(
     lessons: dict[str, Any],
     candidate: dict,
@@ -1090,5 +1305,34 @@ def update_lessons_from_result(
                     entry["verdict"] = "prefer"
                 elif entry["avg_sharpe"] < 0.8:
                     entry["verdict"] = "deprioritize"
+
+    # --- v2: append an immutable experiment fact + recompute derived rollups ---
+    # `action` here is the quality_filter verdict (SUBMIT / OBSERVE / DISCARD).
+    fp = _fingerprint_candidate(candidate)
+    expr_text = candidate.get("expression", "")
+    if isinstance(expr_text, dict):
+        expr_text = expr_text.get("code") or ""
+    experiment = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "alpha_id": sim_result.get("alpha_id"),
+        "ast_hash": fp["ast_hash"],
+        "concept_id": candidate.get("concept_id") or candidate.get("template_id"),
+        "ops": fp["ops"],
+        "field_classes": fp["field_classes"],
+        "depth": fp["depth"],
+        "source": candidate.get("source", "template"),
+        "expr": str(expr_text)[:200],
+        "settings": {
+            "decay": candidate.get("settings", {}).get("decay"),
+            "neutralization": candidate.get("settings", {}).get("neutralization"),
+            "universe": candidate.get("settings", {}).get("universe"),
+        },
+        "is": {"sharpe": sharpe, "fitness": fitness, "turnover": turnover},
+        "max_corr": max_corr,
+        "verdict": action,
+        "failure_mode": _verdict_to_failure_mode(action, sharpe, fitness, turnover, max_corr),
+    }
+    lessons.setdefault("experiments", []).append(experiment)
+    recompute_rollups(lessons)
 
     lessons["last_updated"] = datetime.now(timezone.utc).isoformat()

@@ -31,16 +31,29 @@ class FieldValidator:
     def __init__(self, fields_path: Path | None = None):
         self.valid_fields: set[str] = set()
         self.field_list: list[str] = []
+        # field id -> category id (e.g. "operating_income" -> "fundamental").
+        # Used by structure_fingerprint() to classify fields by data category.
+        self.field_categories: dict[str, str] = {}
         if fields_path and fields_path.exists():
             data = json.loads(fields_path.read_text(encoding="utf-8"))
             if isinstance(data, list):
                 # Each item is a dict with an 'id' key, e.g. {"id": "operating_income", "alphaCount": 200, ...}
                 self.field_list = [f["id"] for f in data if isinstance(f, dict) and "id" in f]
+                self.field_categories = {
+                    f["id"]: (f.get("category") or {}).get("id", "unknown")
+                    for f in data
+                    if isinstance(f, dict) and "id" in f and isinstance(f.get("category"), dict)
+                }
             elif isinstance(data, dict):
                 # Could be {"fields": [...]} or {"id": [...]} or flat {"field_name": {...}}
                 for v in data.values():
                     if isinstance(v, list) and v and isinstance(v[0], dict):
                         self.field_list = [item["id"] for item in v if isinstance(item, dict) and "id" in item]
+                        self.field_categories = {
+                            item["id"]: (item.get("category") or {}).get("id", "unknown")
+                            for item in v
+                            if isinstance(item, dict) and "id" in item and isinstance(item.get("category"), dict)
+                        }
                         break
                 if not self.field_list:
                     # Flat dict: keys are field names
@@ -92,6 +105,129 @@ class FieldValidator:
             if not self.is_valid(token):
                 all_valid = False
         return all_valid
+
+
+# --------------------------------------------------------------------------- #
+# Shared FASTEXPR knowledge (single source of truth for both producers).
+# llm_producer imports these so the two paths can never drift apart.
+# --------------------------------------------------------------------------- #
+KNOWN_OPERATORS = {
+    # cross-sectional
+    "rank", "group_rank", "group_mean", "group_neutralize", "group_zscore",
+    "zscore", "scale", "winsorize", "normalize", "quantile",
+    # time-series
+    "ts_rank", "ts_mean", "ts_std_dev", "ts_delta", "ts_delay", "ts_sum",
+    "ts_max", "ts_min", "ts_corr", "ts_covariance", "ts_regression",
+    "ts_decay_linear", "ts_count", "ts_zscore", "ts_product", "ts_argmax",
+    "ts_argmin", "ts_scale",
+    # arithmetic / logic
+    "abs", "log", "sign", "power", "sqrt", "max", "min", "if_else",
+    "add", "subtract", "multiply", "divide",
+}
+
+# Price/volume + grouping builtins: valid tokens that are NOT in the data-field
+# reference (which only lists fundamental/analyst/etc. fields). For field-class
+# classification these all map to the "pv" category.
+PRICE_VOLUME_BUILTINS = {
+    "close", "open", "high", "low", "vwap", "volume", "returns", "cap",
+    "sharesout", "adv20", "adv60", "adv120",
+}
+GROUP_BUILTINS = {"industry", "subindustry", "sector", "market"}
+
+
+# --------------------------------------------------------------------------- #
+# Structure fingerprint — the v2 lessons aggregation key.
+#
+# A factor's *idea* is its operator/field structure, not its exact string. Two
+# expressions that differ only in window sizes or which concrete pv field they
+# use share a structure and should aggregate together in the experience log.
+# Shared by both producers (template grid + LLM) so lessons accumulate across
+# both paths under one key space.
+# --------------------------------------------------------------------------- #
+def _max_paren_depth(expr: str) -> int:
+    depth = 0
+    best = 0
+    for ch in expr:
+        if ch == "(":
+            depth += 1
+            best = max(best, depth)
+        elif ch == ")":
+            depth = max(0, depth - 1)
+    return best
+
+
+def _expr_operators(expr: str) -> list[str]:
+    """Sorted list of known operators actually called in the expression."""
+    low = expr.lower()
+    return sorted({op for op in KNOWN_OPERATORS if re.search(rf"\b{op}\s*\(", low)})
+
+
+def _expr_fields(expr: str) -> list[str]:
+    """Identifier tokens that are NOT function calls and NOT group builtins —
+    i.e. the data fields (incl. pv builtins) the expression reads."""
+    # Strip numeric literals (incl. scientific notation) so the 'e' in 1e-6
+    # is not mistaken for a field token.
+    cleaned = re.sub(r"\b\d+\.?\d*(?:[eE][+-]?\d+)?\b", " ", expr.lower())
+    fields: list[str] = []
+    for m in re.finditer(r"[a-z_][a-z0-9_]*", cleaned):
+        tok = m.group(0)
+        after = cleaned[m.end():m.end() + 1]
+        if after.lstrip().startswith("("):
+            continue  # function call
+        if tok in KNOWN_OPERATORS or tok in GROUP_BUILTINS:
+            continue
+        fields.append(tok)
+    return sorted(set(fields))
+
+
+def structure_fingerprint(
+    expr: str,
+    field_categories: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Return a structural fingerprint of a FASTEXPR expression.
+
+    Keys:
+      * ast_hash      — short hash of the normalized skeleton (every field token
+                        replaced by 'F', every numeric literal by 'N'). Stable
+                        across window/field swaps; the primary rollup key.
+      * ops           — sorted operators used.
+      * fields        — sorted concrete fields read (incl. pv builtins).
+      * field_classes — sorted data categories of those fields (pv builtins ->
+                        "pv"; reference fields -> their category id; unknown ->
+                        "unknown"). The cross-idea generalization key.
+      * depth         — max parenthesis nesting (rough structural complexity).
+    """
+    field_categories = field_categories or {}
+    low = expr.lower()
+
+    # Normalized skeleton: numbers -> N, then field identifiers -> F. Operators
+    # and group builtins are preserved so the skeleton still encodes structure.
+    skel = re.sub(r"\b\d+\.?\d*(?:[eE][+-]?\d+)?\b", "N", low)
+    fields = _expr_fields(expr)
+
+    def _classify(f: str) -> str:
+        if f in PRICE_VOLUME_BUILTINS:
+            return "pv"
+        return field_categories.get(f, "unknown")
+
+    # Replace whole-word field tokens with F (longest first to avoid partials).
+    for f in sorted(fields, key=len, reverse=True):
+        skel = re.sub(rf"\b{re.escape(f)}\b", "F", skel)
+    # Collapse whitespace so trivial spacing differences don't change the hash.
+    skel_norm = re.sub(r"\s+", "", skel)
+
+    import hashlib
+    ast_hash = hashlib.sha1(skel_norm.encode("utf-8")).hexdigest()[:12]
+
+    field_classes = sorted({_classify(f) for f in fields}) if fields else []
+
+    return {
+        "ast_hash": ast_hash,
+        "ops": _expr_operators(expr),
+        "fields": fields,
+        "field_classes": field_classes,
+        "depth": _max_paren_depth(expr),
+    }
 
 
 # --------------------------------------------------------------------------- #
