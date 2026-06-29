@@ -21,3 +21,4 @@ __pycache__/
 .venv/
 venv/
 *.bak
+mining_run_*.log
