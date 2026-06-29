@@ -1,7 +1,7 @@
 {
   "template_id": "vol_adjusted_momentum",
   "description": "波动率调整动量因子：用日收益信息比率（均值/波动率）替代原始动量，规避高波动假信号",
-  "skeleton": "group_rank({ir_signal} / ({vol_signal} + 1e-6), {group})",
+  "skeleton": "group_rank({ir_signal} / ({vol_signal} + 0.000001), {group})",
   "field_pairs": [
     {
       "name": "ir",
@@ -38,6 +38,6 @@
   "expected_correlation": "低相关于所有现有模板——首次引入returns字段的ts_std_dev作为条件变量，信号来源完全不同",
   "failure_risks": {
     "SIM_ERROR": "ts_std_dev(returns, window)在TOP3000需验证event类型——若为event则改用ts_std_dev(close/open-1, window)",
-    "LOW_FITNESS": "波动率倒数放大尾部效应，确保+1e-6防止除零"
+    "LOW_FITNESS": "波动率倒数放大尾部效应，确保+0.000001防止除零"
   }
 }

@@ -1,7 +1,7 @@
 {
   "template_id": "vwap_momentum",
   "description": "VWAP动量因子：用成交量加权均价的时序变化率替代传统收盘价动量，捕获更稳健的机构驱动趋势",
-  "skeleton": "group_rank(ts_rank({vwap_chg} / ({vwap_vol} + 1e-6), {window}), {group})",
+  "skeleton": "group_rank(ts_rank({vwap_chg} / ({vwap_vol} + 0.000001), {window}), {group})",
   "field_pairs": [
     {
       "name": "vwap_chg",

@@ -462,7 +462,14 @@ class BrainClient:
         return {"status": "COMPLETE", "alpha_id": alpha_id, "sim_data": alpha_data}
 
     def _poll_simulation(self, sim_id: str, timeout: int = 600) -> dict[str, Any]:
-        start = time.time()
+        # #25: use a MONOTONIC clock for the deadline, never the wall clock.
+        # time.time() can jump (NTP steps, manual clock changes, or a sandbox
+        # that pauses/resumes the container and resyncs CLOCK_REALTIME) and a
+        # backward/forward jump can either prematurely TIMEOUT a running sim or
+        # — worse — keep the loop alive far past its budget. time.monotonic()
+        # only ever moves forward at a steady rate, so the elapsed-time check is
+        # immune to wall-clock surprises.
+        start = time.monotonic()
         logger.info("Polling simulation start sim_id=%s timeout=%ss", sim_id, timeout)
         last_status = None
         # #18: time spent waiting out 429 rate-limits must NOT eat the polling
@@ -472,7 +479,23 @@ class BrainClient:
         # the budget would discard a real result and waste the fuel.
         rate_limit_wait = 0.0
         MAX_RATE_LIMIT_WAIT = 600.0  # safety cap on extra 429 grace time
-        while time.time() - start < timeout + rate_limit_wait:
+        # #25: iteration hard cap — a clock-independent backstop. Even if every
+        # time source is frozen or lying, the loop MUST terminate after a bounded
+        # number of polls so a sim stuck in UNKNOWN/pending can never hang the
+        # worker (and, via ThreadPoolExecutor.__exit__, the whole run) forever.
+        # Each loop iteration sleeps >=5s, so the worst-case time budget
+        # (timeout + MAX_RATE_LIMIT_WAIT) maps to ~(budget/5) iterations; we add
+        # generous headroom so this only ever fires when the clock misbehaves.
+        max_iters = int((timeout + MAX_RATE_LIMIT_WAIT) / 5) + 40
+        iters = 0
+        while time.monotonic() - start < timeout + rate_limit_wait:
+            iters += 1
+            if iters > max_iters:
+                logger.info(
+                    "Polling simulation iteration cap hit sim_id=%s iters=%s max_iters=%s elapsed=%.1fs",
+                    sim_id, iters, max_iters, time.monotonic() - start,
+                )
+                return {"status": "TIMEOUT", "simulation_id": sim_id}
             resp = self.get_with_retry(
                 f"{API_BASE}/simulations/{sim_id}", return_on_rate_limit=True
             )
@@ -526,7 +549,7 @@ class BrainClient:
                 logger.debug("Polling simulation failed data sim_id=%s data=%s", sim_id, json.dumps(data, ensure_ascii=False, default=str)[:2000])
                 return {"status": "ERROR", "sim_data": data}
             time.sleep(5)
-        logger.info("Polling simulation timeout sim_id=%s elapsed=%.1fs", sim_id, time.time() - start)
+        logger.info("Polling simulation timeout sim_id=%s elapsed=%.1fs", sim_id, time.monotonic() - start)
         return {"status": "TIMEOUT", "simulation_id": sim_id}
 
     def _is_retryable_sim_error(self, sim_result: dict[str, Any]) -> bool:
@@ -724,18 +747,69 @@ class BrainClient:
 
         completed = 0
         total = len(candidates)
-        with ThreadPoolExecutor(max_workers=concurrency) as pool:
-            futures = {
-                pool.submit(_run_one, i, cand): i
-                for i, cand in enumerate(candidates)
-            }
-            for future in as_completed(futures):
-                result = future.result()
-                completed += 1
-                status = result.get("sim_result", {}).get("status", "?")
-                expr_short = result["expression"][:50]
-                print(f"  [{completed}/{total}] {status} — {expr_short}", flush=True)
-                yield result
+        # Heartbeat: a long unattended run can go silent for up to ~13min when
+        # every worker is stuck on a slow sim (600s poll + retries). That silence
+        # is indistinguishable from a real hang unless we emit a periodic "still
+        # alive + progress" line. Interval is timed on the MONOTONIC clock (immune
+        # to the sandbox freezing the container between turns, see #25) but the
+        # printed stamp uses the WALL clock so a human can compare "last heartbeat
+        # vs now" to tell "slow but alive" from "dead". WQ_HEARTBEAT_SEC=0 disables.
+        try:
+            hb_interval = float(os.getenv("WQ_HEARTBEAT_SEC", "30"))
+        except (TypeError, ValueError):
+            hb_interval = 30.0
+        hb_state = {"completed": 0, "last_status": "-"}
+        hb_stop = threading.Event()
+        hb_start = time.monotonic()
+
+        def _heartbeat() -> None:
+            last_beat = time.monotonic()
+            while not hb_stop.wait(1.0):
+                now = time.monotonic()
+                if now - last_beat < hb_interval:
+                    continue
+                last_beat = now
+                done = hb_state["completed"]
+                in_flight = max(0, min(concurrency, total - done))
+                logger.info(
+                    "Batch heartbeat ts=%s elapsed=%.0fs progress=%s/%s in_flight=%s last_status=%s",
+                    datetime.now(timezone.utc).isoformat(),
+                    now - hb_start,
+                    done,
+                    total,
+                    in_flight,
+                    hb_state["last_status"],
+                )
+                print(
+                    f"  [heartbeat] {datetime.now().strftime('%H:%M:%S')} "
+                    f"elapsed={now - hb_start:.0f}s {done}/{total} "
+                    f"in_flight={in_flight} last={hb_state['last_status']}",
+                    flush=True,
+                )
+
+        hb_thread: threading.Thread | None = None
+        if hb_interval > 0:
+            hb_thread = threading.Thread(target=_heartbeat, daemon=True)
+            hb_thread.start()
+        try:
+            with ThreadPoolExecutor(max_workers=concurrency) as pool:
+                futures = {
+                    pool.submit(_run_one, i, cand): i
+                    for i, cand in enumerate(candidates)
+                }
+                for future in as_completed(futures):
+                    result = future.result()
+                    completed += 1
+                    status = result.get("sim_result", {}).get("status", "?")
+                    hb_state["completed"] = completed
+                    hb_state["last_status"] = status
+                    expr_short = result["expression"][:50]
+                    print(f"  [{completed}/{total}] {status} — {expr_short}", flush=True)
+                    yield result
+        finally:
+            hb_stop.set()
+            if hb_thread is not None:
+                hb_thread.join(timeout=2.0)
         logger.info("Batch simulate stream complete candidate_count=%s", len(candidates))
 
     # ----------------------------------------------------------------- #

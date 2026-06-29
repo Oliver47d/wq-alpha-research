@@ -10,7 +10,7 @@
     },
     {
       "numerator": "anl4_buy",
-      "denominator": "anl4_buy + anl4_under",
+      "denominator": "(anl4_buy + anl4_under)",
       "description": "买入vs低配比率 - 机构多空分歧"
     },
     {

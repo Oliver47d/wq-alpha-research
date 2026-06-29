@@ -5,7 +5,7 @@
   "field_pairs": [
     {
       "name": "signal",
-      "numerator": "ts_mean(if_else(returns < 0, -returns / (volume + 1e-6), 0), {window}) - ts_mean(if_else(returns > 0, returns / (volume + 1e-6), 0), {window})",
+      "numerator": "ts_mean(if_else(returns < 0, -returns / (volume + 0.000001), 0), {window}) - ts_mean(if_else(returns > 0, returns / (volume + 0.000001), 0), {window})",
       "denominator": "1"
     }
   ],
@@ -32,7 +32,7 @@
   "expected_correlation": "低相关于amihud_illiquidity_proxy——后者用全部|returns|/volume均值，前者只用负收益日并与正收益日对比；信号信息更丰富",
   "failure_risks": {
     "LOW_SHARPE": "if_else条件导致大量0值，ts_mean窗口需足够长(>=60)",
-    "SIM_ERROR": "if_else(condition, a, b)中condition需为布尔表达式；volume+1e-6防除零",
+    "SIM_ERROR": "if_else(condition, a, b)中condition需为布尔表达式；volume+0.000001防除零",
     "LOW_FITNESS": "正负收益分离后信号可能稀疏；decay可适当增大(8-12)平滑"
   }
 }

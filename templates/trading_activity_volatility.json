@@ -5,12 +5,12 @@
   "field_pairs": [
     {
       "name": "tav",
-      "numerator": "ts_std_dev(volume, {vol_window}) / (ts_mean(volume, {mean_window}) + 1e-6)",
+      "numerator": "ts_std_dev(volume, {vol_window}) / (ts_mean(volume, {mean_window}) + 0.000001)",
       "denominator": "1"
     },
     {
       "name": "tav_relative",
-      "numerator": "ts_std_dev(volume, {vol_window}) / (ts_mean(volume, {mean_window}) + 1e-6) - ts_mean(ts_std_dev(volume, {vol_window}) / (ts_mean(volume, {mean_window}) + 1e-6), {market_window})",
+      "numerator": "ts_std_dev(volume, {vol_window}) / (ts_mean(volume, {mean_window}) + 0.000001) - ts_mean(ts_std_dev(volume, {vol_window}) / (ts_mean(volume, {mean_window}) + 0.000001), {market_window})",
       "denominator": "1"
     }
   ],
@@ -39,7 +39,7 @@
   "expected_correlation": "低相关于relative_volume_strength——后者用volume绝对水平/行业均值比，前者用volume自身的波动系数；信号经济含义完全不同",
   "failure_risks": {
     "LOW_SHARPE": "vol_window太短可能导致噪声；mean_window需>=vol_window保证稳定性",
-    "SIM_ERROR": "ts_std_dev(volume)需确认volume为非event类型；+1e-6防除零",
+    "SIM_ERROR": "ts_std_dev(volume)需确认volume为非event类型；+0.000001防除零",
     "LOW_FITNESS": "波动率比值在高交易量票可能极端，truncation=0.08限制"
   }
 }

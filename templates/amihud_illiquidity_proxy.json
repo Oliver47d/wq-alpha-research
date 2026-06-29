@@ -5,12 +5,12 @@
   "field_pairs": [
     {
       "name": "illiq",
-      "numerator": "ts_mean((returns > 0) * returns - (returns < 0) * returns, {window}) / (volume + 1e-6)",
+      "numerator": "ts_mean((returns > 0) * returns - (returns < 0) * returns, {window}) / (volume + 0.000001)",
       "denominator": "1"
     },
     {
       "name": "illiq_adv_scaled",
-      "numerator": "ts_mean((returns > 0) * returns - (returns < 0) * returns, {window}) / (volume + 1e-6) * (adv20 / cap + 1e-6)",
+      "numerator": "ts_mean((returns > 0) * returns - (returns < 0) * returns, {window}) / (volume + 0.000001) * (adv20 / cap + 0.000001)",
       "denominator": "1"
     }
   ],
@@ -38,6 +38,6 @@
   "failure_risks": {
     "LOW_SHARPE": "低流动性股票可能有极端值，truncation=0.08限制；ts_mean平滑窗口需足够长(>=60)",
     "SIM_ERROR": "abs(returns)需确认returns为event类型；volume可能为shares单位，注意scalability；adv20/cap做规模调整",
-    "DIV_ZERO": "volume+1e-6防止除零"
+    "DIV_ZERO": "volume+0.000001防止除零（FASTEXPR不支持科学计数法，须用十进制字面量而非指数写法）"
   }
 }
