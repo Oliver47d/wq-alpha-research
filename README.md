@@ -67,27 +67,28 @@ world_quant/
 ├── README.md                          ← This file
 ├── SKILL.md                           ← Agent skill playbook (727 lines)
 ├── credential.txt                     ← BRAIN API credentials (gitignored)
-├── alpha_db.json                      ← Alpha snapshot database (43 alphas, 6 ACTIVE)
+├── alpha_db.json                      ← Alpha snapshot database (99 alphas, 8 ACTIVE)
 │
-├── templates/                         ← Structured template JSONs
+├── templates/                         ← Structured template JSONs (20 templates)
 │   ├── profitability_trend.json       ← group_rank(ts_rank(numerator/denominator, window), group)
 │   ├── analyst_estimate_trend.json    ← Analyst expectation fields with turnover control
 │   ├── hybrid_tech_fundamental.json   ← Weighted tech + fundamental signal mixing
-│   └── overnight_reversal.json        ← Overnight price reversal with decay
+│   ├── overnight_reversal.json        ← Overnight price reversal with decay
+│   └── ...                            ← + 16 more (volume/price, volatility regime, momentum, etc.)
 │
 ├── lessons.json                       ← Pattern-level mining experience
 ├── papers_registry.json               ← Paper / report tracking registry
 │
 ├── scripts/
-│   ├── mining_loop.py                 ← Main loop orchestrator (691 lines)
-│   ├── brain_api.py                   ← BRAIN API client: simulate, submit, correlate (519 lines)
-│   ├── generate_candidates.py         ← Template expansion engine (228 lines)
+│   ├── mining_loop.py                 ← Main loop orchestrator (1,873 lines)
+│   ├── brain_api.py                   ← BRAIN API client: simulate, submit, correlate (1,712 lines)
+│   ├── generate_candidates.py         ← Template expansion engine (527 lines)
+│   ├── llm_producer.py                ← Depth engine: agent paper → template extraction (434 lines)
 │   ├── evolve_skill.py                ← Experience sync: alpha_db ↔ lessons.json (274 lines)
 │   ├── submit_batch.py                ← Batch submission with status polling (147 lines)
 │   ├── DESIGN.md                      ← Architecture design document
-│   └── archive/
-│       ├── run_alpha101.py            ← Legacy Alpha-101 experiment v1
-│       └── run_alpha101_v2.py         ← Legacy Alpha-101 experiment v2
+│   ├── run_alpha101.py               ← Legacy Alpha-101 experiment v1
+│   └── run_alpha101_v2.py            ← Legacy Alpha-101 experiment v2
 │
 └── references/                        ← Local BRAIN data field snapshot
     ├── wq_usa_top3000_delay1_data_fields.csv       (1.4 MB, 4,367 fields)
