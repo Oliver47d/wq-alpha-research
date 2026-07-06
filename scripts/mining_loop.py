@@ -103,6 +103,21 @@ PRODUCERS = {"template", "llm", "gp"}
 # handled by the existing lessons(by_ast)/alpha_db feedback loop.
 GP_CHILDREN_PER_ROUND = int(os.getenv("WQ_GP_CHILDREN_PER_ROUND", "30"))
 GP_SEED_POOL_SIZE = int(os.getenv("WQ_GP_SEED_POOL_SIZE", "40"))
+# BRAIN's /simulations API requires `decay` and `neutralization`; brain_api's
+# DEFAULT_SETTINGS omits both (the template path fills them per param combo).
+# GP has no param grid, so supply sane defaults here or the request 400s with
+# "This field is required."
+GP_DECAY = int(os.getenv("WQ_GP_DECAY", "4"))
+GP_NEUTRALIZATION = os.getenv("WQ_GP_NEUTRALIZATION", "SUBINDUSTRY")
+
+
+def _gp_settings() -> dict:
+    """Full settings dict for a GP candidate: DEFAULT_SETTINGS + the two
+    required fields BRAIN rejects the request without."""
+    s = dict(DEFAULT_SETTINGS)
+    s["decay"] = GP_DECAY
+    s["neutralization"] = GP_NEUTRALIZATION
+    return s
 
 LOG_LEVEL = os.getenv("WQ_LOG_LEVEL", "INFO").upper()
 if not logging.getLogger().handlers:
@@ -492,7 +507,7 @@ def build_candidates_gp(lessons: dict) -> list[dict]:
             emitted.add(ast_hash)
         candidates.append({
             "expression": expr,
-            "settings": dict(DEFAULT_SETTINGS),
+            "settings": _gp_settings(),
             # template_id doubles as the lessons aggregation key; use ast_hash so
             # GP-bred factors roll up by structure alongside the other producers.
             "template_id": ast_hash or "gp_unknown",
@@ -500,8 +515,8 @@ def build_candidates_gp(lessons: dict) -> list[dict]:
             "ast_hash": ast_hash,
             "source": "gp",
             "params": {
-                "decay": DEFAULT_SETTINGS.get("decay"),
-                "neutralization": DEFAULT_SETTINGS.get("neutralization"),
+                "decay": GP_DECAY,
+                "neutralization": GP_NEUTRALIZATION,
             },
         })
 
