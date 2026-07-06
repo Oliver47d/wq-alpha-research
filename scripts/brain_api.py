@@ -1373,7 +1373,14 @@ def _extract_params(candidate: dict) -> dict[str, str]:
     params["decay"] = str(settings.get("decay", 0))
     params["neutralization"] = str(settings.get("neutralization", "INDUSTRY"))
     field_pair = candidate.get("field_pair", {})
-    params.update({k: str(v) for k, v in field_pair.items()})
+    # field_pair is a dict in single/legacy mode ({numerator, denominator, ...})
+    # but a list of names in combined mode (skeleton with >=2 signal slots, see
+    # generate_candidates.expand_template). Handle both so lessons tracking never
+    # crashes on combined-mode candidates.
+    if isinstance(field_pair, dict):
+        params.update({k: str(v) for k, v in field_pair.items()})
+    elif isinstance(field_pair, list):
+        params["field_pair_names"] = ",".join(str(x) for x in field_pair)
     params.update({k: str(v) for k, v in candidate.get("params", {}).items()})
     return params
 

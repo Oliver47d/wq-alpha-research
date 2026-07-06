@@ -89,15 +89,16 @@ class FieldValidator:
         # Skip operators and functions, extract potential field names
         # Field names are typically lowercase with underscores and digits
         tokens = re.findall(r'[a-z][a-z0-9_]+', expr.lower())
-        skip = {
-            "group_rank", "ts_rank", "rank", "ts_mean", "ts_std_dev",
-            "ts_delta", "ts_delay", "ts_sum", "ts_max", "ts_min",
-            "ts_regression", "ts_corr", "ts_covariance",
-            "subindustry", "industry", "sector", "market",
-            "close", "open", "high", "low", "vwap", "volume", "returns",
-            "cap", "sharesout", "adv20", "adv60", "adv120",
-            "trade", "halt", "na", "inf", "true", "false",
-        }
+        # Derive the skip set from the single sources of truth so the operator
+        # list can never drift out of sync (a hand-maintained copy here used to
+        # miss ts_count / if_else / group_mean etc., silently killing every
+        # candidate of the templates that used them).
+        skip = (
+            KNOWN_OPERATORS
+            | GROUP_BUILTINS
+            | PRICE_VOLUME_BUILTINS
+            | {"trade", "halt", "na", "inf", "true", "false"}
+        )
         all_valid = True
         for token in tokens:
             if token in skip:
