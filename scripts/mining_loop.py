@@ -56,6 +56,13 @@ from llm_producer import (  # noqa: E402
     build_generation_request,
     to_candidates as llm_to_candidates,
 )
+from factor_gp import (  # noqa: E402
+    crossover,
+    mutate,
+    validate,
+    _field_pool_by_category,
+)
+from factor_seeds import Seed, load_seeds  # noqa: E402
 
 LESSONS_PATH = SKILL_DIR / "lessons.json"
 PAPERS_REGISTRY_PATH = SKILL_DIR / "papers_registry.json"
@@ -88,7 +95,14 @@ EXPLORE_EPSILON = float(os.getenv("WQ_EXPLORE_EPSILON", "0.15"))
 SKIP_REVIVAL_PROB = float(os.getenv("WQ_SKIP_REVIVAL_PROB", "0.1"))
 SKIP_REVIVAL_BUDGET = int(os.getenv("WQ_SKIP_REVIVAL_BUDGET", "2"))
 DEPTH_BACKENDS = {"handoff", "claude", "manual", "none"}
-PRODUCERS = {"template", "llm"}
+PRODUCERS = {"template", "llm", "gp"}
+
+# GP producer: one structural-breeding generation per mining round. How many
+# new (crossover/mutate) children to emit as candidates; the standard breadth
+# pipeline then simulates/filters/submits them, and cross-round selection is
+# handled by the existing lessons(by_ast)/alpha_db feedback loop.
+GP_CHILDREN_PER_ROUND = int(os.getenv("WQ_GP_CHILDREN_PER_ROUND", "30"))
+GP_SEED_POOL_SIZE = int(os.getenv("WQ_GP_SEED_POOL_SIZE", "40"))
 
 LOG_LEVEL = os.getenv("WQ_LOG_LEVEL", "INFO").upper()
 if not logging.getLogger().handlers:
@@ -298,6 +312,8 @@ def build_candidates(
         raise ValueError(f"Invalid producer: {producer} (choose from {sorted(PRODUCERS)})")
     if producer == "llm":
         return build_candidates_llm(lessons)
+    if producer == "gp":
+        return build_candidates_gp(lessons)
     return build_candidates_template(lessons, max_per_template=max_per_template)
 
 
@@ -389,6 +405,116 @@ def build_candidates_llm(lessons: dict) -> list[dict]:
         print(f"  [cap] Truncated to {len(kept)} candidates (ε-greedy explore)")
     logger.info("LLM producer complete candidate_count=%s", len(kept))
     return kept
+
+
+def _gp_skip_hashes(lessons: dict) -> set[str]:
+    """ast_hashes the lessons-v2 rollups say to skip (enough evidence, 0 passes).
+
+    Mirrors factor_gp_loop._skip_hashes so the GP producer honors the same
+    structural feedback the offline evolve() loop does.
+    """
+    by_ast = (lessons or {}).get("rollups", {}).get("by_ast", {})
+    return {h for h, r in by_ast.items() if r.get("action") == "skip"}
+
+
+def build_candidates_gp(lessons: dict) -> list[dict]:
+    """GP producer: one structural-breeding generation → drop-in candidates.
+
+    Unlike template/llm, GP is *structure-generating*: it seeds from the real
+    factor pool (alpha_db) and applies the legal-by-construction genetic
+    operators (crossover/mutate) — which can rewrite the ROOT operator, not just
+    fill leaves — to emit brand-new structures. This is exactly the reform that
+    breaks the frozen-shell homogeneity of the template/llm paths.
+
+    It does NOT call evolve()/BrainEvaluator here: those simulate inside the
+    loop, which would double-spend BRAIN quota on top of run_breadth_round. We
+    only breed one generation of new children and hand them to the standard
+    breadth pipeline (simulate/filter/submit). Cross-round selection pressure is
+    supplied by the existing feedback loop: lessons(by_ast) skip-lists dead
+    structures, and simulated factors flow back into alpha_db as next round's
+    seed pool.
+    """
+    seeds = load_seeds()
+    if not seeds:
+        logger.info("GP producer: no seeds available (empty alpha_db)")
+        print("  [gp] No seeds in alpha_db; cannot breed. Falling back to no candidates.")
+        return []
+
+    validator = FieldValidator(FIELDS_PATH)
+    fcats = validator.field_categories
+    pool = _field_pool_by_category(validator)
+    skip = _gp_skip_hashes(lessons)
+    rng = random.Random()
+
+    # Parent pool: drop skip-listed structures, dedup, prefer higher-sharpe
+    # seeds (so breeding starts from the strongest real factors).
+    parents: list[Seed] = []
+    seen: set[str] = set()
+    for s in sorted(seeds, key=lambda x: -(x.metrics.get("sharpe") or 0.0)):
+        if s.ast_hash in skip or s.ast_hash in seen:
+            continue
+        seen.add(s.ast_hash)
+        parents.append(s)
+        if len(parents) >= GP_SEED_POOL_SIZE:
+            break
+    logger.info(
+        "GP producer parents ready seed_total=%s parents=%s skip_listed=%s",
+        len(seeds), len(parents), len(skip),
+    )
+    print(f"  [gp] Seeded {len(parents)} parents from alpha_db "
+          f"({len(seeds)} seeds, {len(skip)} skip-listed structures)")
+    if not parents:
+        return []
+
+    parent_trees = [p.tree for p in parents]
+    candidates: list[dict] = []
+    emitted: set[str] = set(skip)
+    attempts = 0
+    cap = GP_CHILDREN_PER_ROUND * 20
+    while len(candidates) < GP_CHILDREN_PER_ROUND and attempts < cap:
+        attempts += 1
+        if len(parent_trees) >= 2 and rng.random() < 0.5:
+            a, b = rng.sample(parent_trees, 2)
+            child = crossover(a, b, rng)
+        else:
+            child = mutate(rng.choice(parent_trees), rng, field_pool=pool)
+        ok, expr = validate(child, validator)
+        if not ok:
+            continue
+        try:
+            ast_hash = structure_fingerprint(expr, fcats)["ast_hash"]
+        except Exception:
+            ast_hash = None
+        # Reject structures we've already emitted this round or that are skip-listed.
+        if ast_hash and ast_hash in emitted:
+            continue
+        if ast_hash:
+            emitted.add(ast_hash)
+        candidates.append({
+            "expression": expr,
+            "settings": dict(DEFAULT_SETTINGS),
+            # template_id doubles as the lessons aggregation key; use ast_hash so
+            # GP-bred factors roll up by structure alongside the other producers.
+            "template_id": ast_hash or "gp_unknown",
+            "concept_id": ast_hash or "gp_unknown",
+            "ast_hash": ast_hash,
+            "source": "gp",
+            "params": {
+                "decay": DEFAULT_SETTINGS.get("decay"),
+                "neutralization": DEFAULT_SETTINGS.get("neutralization"),
+            },
+        })
+
+    candidates = deduplicate(candidates)
+    if len(candidates) > MAX_CANDIDATES_PER_ROUND:
+        candidates = _truncate_with_exploration(candidates, MAX_CANDIDATES_PER_ROUND)
+        print(f"  [cap] Truncated to {len(candidates)} candidates (ε-greedy explore)")
+    logger.info(
+        "GP producer complete bred=%s attempts=%s parents=%s",
+        len(candidates), attempts, len(parents),
+    )
+    print(f"  [gp] Bred {len(candidates)} new structural candidate(s) in {attempts} attempts")
+    return candidates
 
 
 def build_candidates_template(lessons: dict, max_per_template: int = 15) -> list[dict]:
