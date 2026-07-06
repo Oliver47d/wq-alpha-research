@@ -21,9 +21,11 @@ Three pieces:
 
   3. BrainEvaluator  — the real adapter. Reuses the existing machinery verbatim
      (batch_simulate_stream / fetch_self_correlation / compute_correlation /
-     quality_filter): NO reimplementation of BRAIN plumbing. Two-level correlation:
-     cheap local PnL prefilter, then the authoritative platform SELF_CORRELATION
-     endpoint only for elites. Running it consumes real simulation quota and
+     quality_filter): NO reimplementation of BRAIN plumbing. PnL always comes
+     from BRAIN (fetch_pnl); there is no local backtest. Two-level correlation:
+     a cheap local-*computed* prefilter (numpy corrcoef of BRAIN-fetched PnL vs
+     our own ACTIVE alphas), then the authoritative platform SELF_CORRELATION
+     endpoint (whole pool) only for elites. Running it consumes real simulation quota and
      mutates alpha_db.json / lessons.json, so it is gated behind an explicit call.
 """
 from __future__ import annotations
@@ -203,11 +205,14 @@ def evolve(
 class BrainEvaluator:
     """Evaluate individuals on the live BRAIN platform, reusing existing machinery.
 
-    Two-level correlation (cheap -> authoritative):
-      * prefilter: local PnL correlation vs cached ACTIVE alphas (compute_correlation).
+    Two-level correlation (cheap -> authoritative). NOTE: PnL is always fetched
+    from BRAIN (fetch_pnl) — there is no local backtest; "local" below refers to
+    where the correlation is *computed*, not where the PnL comes from.
+      * prefilter: correlation computed locally (numpy) from BRAIN-fetched PnL vs
+        our cached ACTIVE alphas only (compute_correlation).
       * elite gate: the platform SELF_CORRELATION endpoint (fetch_self_correlation)
         only for candidates that clear the local prefilter, since it is the slow,
-        authoritative check BRAIN's own submission uses.
+        authoritative whole-pool check BRAIN's own submission uses.
 
     Side effects: consumes simulation quota, writes alpha_db.json / lessons.json.
     Constructing this does NOT run anything; call it as the evolve() evaluate= arg.
@@ -258,7 +263,8 @@ class BrainEvaluator:
                     "simulated_at": datetime.now(timezone.utc).isoformat(),
                 }
 
-            # Level 1: cheap local prefilter.
+            # Level 1: cheap prefilter — PnL from BRAIN, corr computed locally
+            # (numpy) against our own ACTIVE alphas only.
             max_corr = None
             if alpha_id and self.active_pnls:
                 new_pnl = self.client.fetch_pnl(alpha_id)
@@ -272,7 +278,8 @@ class BrainEvaluator:
                     if corr_list:
                         max_corr = max(abs(c.get("correlation", 0)) for c in corr_list)
 
-            # Level 2: authoritative platform check — only if local looks clean.
+            # Level 2: authoritative whole-pool platform check — only if the
+            # local prefilter looks clean.
             if alpha_id and (max_corr is None or max_corr < self.corr_prefilter):
                 platform_corr = self.client.fetch_self_correlation(alpha_id)
                 if platform_corr is not None:
