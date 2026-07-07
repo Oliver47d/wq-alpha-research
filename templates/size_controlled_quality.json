@@ -1,0 +1,37 @@
+{
+  "template_id": "size_controlled_quality",
+  "description": "市值控制质量因子：论文核心方法——原始组合的超额收益常掺杂市值因素(无机构持股组合的8%超额收益主要来自小市值)，需先控制市值才能分离真实Alpha。本模板在盈利质量信号基础上，通过cap回归/中性化思路减去市值暴露，得到市值中性的质量Alpha。",
+  "skeleton": "group_rank(ts_rank({quality_num} / {quality_den}, {window}), {group}) - group_rank(ts_rank(-log(cap), {window}), {group}) * {size_weight}",
+  "field_pairs": [
+    {"name": "roe", "quality_num": "operating_income", "quality_den": "equity"},
+    {"name": "roa", "quality_num": "operating_income", "quality_den": "sales"},
+    {"name": "ep", "quality_num": "eps", "quality_den": "close"}
+  ],
+  "param_ranges": {
+    "window": [126, 252],
+    "group": ["industry", "subindustry"],
+    "size_weight": [0.2, 0.3],
+    "decay": [4],
+    "truncation": [0.08]
+  },
+  "default_settings": {
+    "instrumentType": "EQUITY",
+    "region": "USA",
+    "universe": "TOP3000",
+    "delay": 1,
+    "decay": 4,
+    "neutralization": "SUBINDUSTRY",
+    "truncation": 0.08,
+    "pasteurization": "ON",
+    "nanHandling": "ON",
+    "unitHandling": "VERIFY"
+  },
+  "hypothesis": "海通(2015)第2节：无机构持股组合的8%超额收益主要由小市值驱动，用Monte Carlo市值配对控制后有机构组合才真正占优。据此，任何质量/价值信号都应先剥离市值暴露以避免误把市值溢价当Alpha。本模板显式减去市值排名分量，得到市值中性化的纯质量信号，理论上更稳定、可解释性更强。",
+  "source": "海通证券《选股因子系列研究(十)：基于机构持股信息的Portable Alpha策略增强》(2015)",
+  "expected_correlation": "与纯市值因子低相关(已中性化)，与盈利质量因子中相关但更纯净",
+  "failure_risks": {
+    "LOW_SHARPE": "过度中性化可能削弱信号；size_weight偏低(0.2-0.3)保留主信号",
+    "SIM_ERROR": "log(cap)要求cap>0，TOP3000成分股cap恒正，安全",
+    "HIGH_CORR": "质量分量可能与现有ROE模板相关，市值中性化后应有所分散"
+  }
+}

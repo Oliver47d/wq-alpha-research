@@ -1,0 +1,35 @@
+{
+  "template_id": "ashare_short_reversal",
+  "description": "A股短期反转因子：海通《A股市场的动量反转效应研究》证明A股反转效应显著强于动量，最优参数为J=3个月观察期(约63交易日)、K=1个月持有期。做多过去累计收益最低组(Losers)。表达式对过去N日累计收益取负排名——收益越低排名越高，捕捉反转反弹。",
+  "skeleton": "group_rank(-ts_sum(returns, {window}), {group})",
+  "field_pairs": [
+    {"name": "cum_return", "numerator": "ts_sum(returns, {window})", "denominator": "1"},
+    {"name": "delta_return", "numerator": "close / ts_delay(close, {window}) - 1", "denominator": "1"}
+  ],
+  "param_ranges": {
+    "window": [21, 63, 126],
+    "group": ["industry", "subindustry"],
+    "decay": [0, 4],
+    "truncation": [0.08]
+  },
+  "default_settings": {
+    "instrumentType": "EQUITY",
+    "region": "USA",
+    "universe": "TOP3000",
+    "delay": 1,
+    "decay": 4,
+    "neutralization": "SUBINDUSTRY",
+    "truncation": 0.08,
+    "pasteurization": "ON",
+    "nanHandling": "ON",
+    "unitHandling": "VERIFY"
+  },
+  "hypothesis": "海通(2012)实证：A股前期收益率最低组在未来1个月大幅反弹，J=3,K=1信息比最优(1.42)，反转单调性成立(收益越低未来Alpha越大)。取负累计收益排名等价于做多Losers；短窗口(约1个月)反转性质最强，故window偏向21-63。",
+  "source": "海通证券《选股因子研究系列(一)：A股市场的动量反转效应研究》(2012)",
+  "expected_correlation": "与现有动量/趋势类模板负相关或低相关；反转方向与group_rank盈利质量因子正交",
+  "failure_risks": {
+    "LOW_SHARPE": "美股反转效应弱于A股，可能Sharpe偏低；短窗口反转换手高，decay平滑必要",
+    "HIGH_TURNOVER": "K=1月对应高换手，用decay=4及truncation=0.08抑制",
+    "DIV_ZERO": "ts_delay(close)理论不为0，close/ts_delay(close,window)安全"
+  }
+}

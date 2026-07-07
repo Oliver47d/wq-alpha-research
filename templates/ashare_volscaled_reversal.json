@@ -1,0 +1,35 @@
+{
+  "template_id": "ashare_volscaled_reversal",
+  "description": "A股波动率调整反转因子：论文指出反转超额收益部分可能由波动性差异引起，需在区分股票时剔除波动干扰。本模板用近期收益的波动率对反转信号做标准化，得到更纯净的反转信号(单位风险的反转强度)。",
+  "skeleton": "group_rank(-ts_sum(returns, {window}) / (ts_std_dev(returns, {window}) + 0.0001), {group})",
+  "field_pairs": [
+    {"name": "vol_scaled_rev", "numerator": "ts_sum(returns, {window})", "denominator": "ts_std_dev(returns, {window}) + 0.0001"},
+    {"name": "zscore_rev", "numerator": "ts_zscore(returns, {window})", "denominator": "1"}
+  ],
+  "param_ranges": {
+    "window": [21, 63, 126],
+    "group": ["industry", "subindustry"],
+    "decay": [0, 4],
+    "truncation": [0.08]
+  },
+  "default_settings": {
+    "instrumentType": "EQUITY",
+    "region": "USA",
+    "universe": "TOP3000",
+    "delay": 1,
+    "decay": 4,
+    "neutralization": "SUBINDUSTRY",
+    "truncation": 0.08,
+    "pasteurization": "ON",
+    "nanHandling": "ON",
+    "unitHandling": "VERIFY"
+  },
+  "hypothesis": "海通(2012)单调性研究提示：反转的部分超额收益可能来自不同组别的波动性差异，若不剔除则反转在区分股票上作用受限。用ts_std_dev标准化累计收益，得到单位波动的反转强度，滤除高波动噪声，理论上比原始反转更稳定、换手更低。",
+  "source": "海通证券《选股因子研究系列(一)：A股市场的动量反转效应研究》(2012)",
+  "expected_correlation": "与原始反转模板ashare_short_reversal中高相关但更稳健；与盈利质量因子低相关",
+  "failure_risks": {
+    "LOW_SHARPE": "标准化可能削弱强反转信号幅度；window需足够长(>=21)以估计稳定波动",
+    "SIM_ERROR": "ts_std_dev在极短窗口可能为0，已加0.0001防除零",
+    "DIV_ZERO": "分母ts_std_dev(returns,window)+0.0001恒正，安全"
+  }
+}

@@ -17,19 +17,44 @@
       "locator": "papers/1. A股市场的动量反转效应研究.pdf",
       "title": "A股市场的动量反转效应研究",
       "type": "research_report",
-      "status": "unread"
+      "status": "consumed",
+      "request_date": "2026-07-07T04:57:03.860571+00:00",
+      "read_date": "2026-07-07T05:05:59.070315+00:00",
+      "extracted_templates": [
+        "ashare_short_reversal.json",
+        "ashare_value_reversal_combo.json",
+        "ashare_volscaled_reversal.json"
+      ],
+      "extraction_round": 2,
+      "notes": "海通证券《选股因子研究系列(一)》核心结论：A股反转效应显著强于动量效应，最优参数J=3个月观察期/K=1个月持有期，做多前期收益最低组(Losers)信息比达1.42且单调性成立(收益越低未来Alpha越大)。据此抽取3个模板：(1) ashare_short_reversal 纯短期反转，对过去N日累计收益取负排名；(2) ashare_value_reversal_combo 低估值+反转组合，复现论文‘低估值+反转在各市场状态均跑赢基准’的核心策略；(3) ashare_volscaled_reversal 波动率调整反转，回应论文单调性研究中‘部分超额收益源于波动性差异’的提示，用ts_std_dev标准化以滤除高波动噪声。三个模板均已通过expand_template+FieldValidator校验，字段全部存在于USA TOP3000 delay1字段表，含decay/neutralization必填项。窗口偏向21-63交易日以贴合论文短窗口反转最强的结论。"
     },
     "src_003": {
       "locator": "papers/10. 基于机构持股信息的Portable_Alpha策略增强.pdf",
       "title": "基于机构持股信息的Portable_Alpha策略增强",
       "type": "research_report",
-      "status": "unread"
+      "status": "consumed",
+      "request_date": "2026-07-07T06:11:00.291135+00:00",
+      "read_date": "2026-07-07T06:18:00.468803+00:00",
+      "extracted_templates": [
+        "size_controlled_quality.json",
+        "portable_alpha_graft.json"
+      ],
+      "extraction_round": 3,
+      "notes": "海通证券《选股因子系列研究(十)》主题为‘机构持股分类 + 市值控制 + Portable Alpha 策略嫁接’。数据限制：USA TOP3000 delay1 字段表中无机构持股/13F 类字段，无法复现论文原始的‘有/无机构持股’分类，故不臆造该维度。改为抽取论文中两个字段可实现且方法论价值最高的通用机制：(1) size_controlled_quality——复现论文核心方法‘原始超额收益掺杂市值因素，需控制市值才能分离真实Alpha’，在盈利质量信号上显式减去市值(log(cap))排名分量做市值中性化；(2) portable_alpha_graft——复现Portable Alpha核心思想，以强ROE质量因子为base(0.7-0.8权重)低权重(0.2-0.3)嫁接低相关的估值overlay，在不显著增加换手/回撤下增强收益。两个模板均已通过expand_template+FieldValidator校验，字段全部存在，含decay/neutralization必填项。"
     },
     "src_004": {
       "locator": "papers/11. Level2行情选股因子初探.pdf",
       "title": "Level2行情选股因子初探",
       "type": "research_report",
-      "status": "unread"
+      "status": "consumed",
+      "request_date": "2026-07-07T07:15:39.015028+00:00",
+      "read_date": "2026-07-07T07:29:00+00:00",
+      "extracted_templates": [
+        "session_volume_composition.json",
+        "volume_composition_residualized.json"
+      ],
+      "extraction_round": 4,
+      "notes": "论文核心为围绕逐笔Level2成交数据构建两类因子:(1)成交占比类(连续竞价/特大单/大单/中单/小单占比)——选股效果极佳,连续竞价占比多空年化27%夏普1.71、超大单占比夏普2.02,且多头效应强(多空1:1);(2)净买入比率类(各档主买主卖差额/成交额)——效果较差,夏普基本<0.5,故不作为提取重点。第4节指出成交占比因子具‘小市值/前期低涨幅/低换手’特征,截面回归剔除风险后仍显著。数据缺口(未编造字段):WQ USA TOP3000 delay=1无逐笔Level2——无特大/大/中/小单金额分档、无主买主卖方向识别、无逐笔trade-count,故论文的分档成交占比与全部净买入比率类因子无法直接复现。可迁移机制:WQ提供分时段成交量(opening_session_volume_count/closing_session_volume_count/current_trading_volume_count),可代理论文最强的连续竞价成交占比机制(连续竞价量占全日量比例);风险剔除方法与数据分档无关,可直接迁移。据此提取2个模板:session_volume_composition(分时段成交量占比,复现连续竞价占比单调性方向)、volume_composition_residualized(在占比信号上显式剔除市值+反转暴露,复现第4节风险中性化方法)。两模板均已用FieldValidator校验字段存在、expand_template展开为带括号的合法FASTEXPR。局限:美股集合竞价机制与A股不同,代理保真度有限,预期与市值/反转/换手类因子中等相关。"
     },
     "src_005": {
       "locator": "papers/12. “量”与“价”的结合.pdf",
@@ -520,7 +545,7 @@
   },
   "stats": {
     "total": 85,
-    "consumed": 1,
-    "remaining": 84
+    "consumed": 4,
+    "remaining": 81
   }
 }

@@ -1,0 +1,37 @@
+{
+  "template_id": "volume_composition_residualized",
+  "description": "风险剔除后的成交结构因子(Level2成交占比+风险中性化)：论文第4节核心方法——成交占比类因子具有‘小市值、前期低涨幅、低换手’特征,使用截面回归取残差方式剔除市值/反转/换手风险因子后,因子依旧具有较好选股效果。本模板在分时段成交量占比信号(连续竞价占比的日频代理)基础上,显式减去市值与前期涨幅暴露,分离出风险中性的纯成交结构Alpha。",
+  "skeleton": "group_rank(ts_mean(({comp_num}) / ({comp_den}), {window}), {group}) - {size_w} * group_rank(-log(cap), {group}) - {rev_w} * group_rank(-ts_sum(returns, {window}), {group})",
+  "field_pairs": [
+    {"name": "continuous_share_resid", "comp_num": "current_trading_volume_count - opening_session_volume_count - closing_session_volume_count", "comp_den": "current_trading_volume_count + 1"}
+  ],
+  "param_ranges": {
+    "window": [21, 63],
+    "group": ["industry", "subindustry"],
+    "size_w": [0.2, 0.3],
+    "rev_w": [0.2, 0.3],
+    "decay": [4],
+    "truncation": [0.08]
+  },
+  "default_settings": {
+    "instrumentType": "EQUITY",
+    "region": "USA",
+    "universe": "TOP3000",
+    "delay": 1,
+    "decay": 4,
+    "neutralization": "SUBINDUSTRY",
+    "truncation": 0.08,
+    "pasteurization": "ON",
+    "nanHandling": "ON",
+    "unitHandling": "VERIFY"
+  },
+  "hypothesis": "海通(2016)第4节:表9-10显示成交占比因子剔除市值/反转/换手风险后多空收益仍显著,证明其含独立于风险因子的增量信息。据此,连续竞价占比代理信号中混入的小市值溢价与反转溢价应被剥离,否则会把已知风险溢价误当Level2 Alpha。本模板显式减去市值排名(-log(cap))与反转排名(-ts_sum(returns)),得到风险中性的纯成交结构信号,理论上更稳定、更可解释、与现有市值/反转模板去相关。",
+  "source": "海通证券《选股因子系列研究(十一)——Level2行情选股因子初探》(2016)",
+  "expected_correlation": "已显式剔除市值与反转暴露,与纯市值/反转模板应低相关;与未中性化的session_volume_composition中高相关但更纯净",
+  "failure_risks": {
+    "LOW_SHARPE": "过度中性化可能削弱主信号;size_w/rev_w偏低(0.2-0.3)保留成交结构主导权",
+    "HIGH_CORR": "成交结构分量仍可能与session_volume_composition高相关,靠减去两风险分量分散",
+    "DIV_ZERO": "分母current_trading_volume_count+1与log(cap)在TOP3000恒正,安全",
+    "DATA_GAP": "同session_volume_composition:WQ USA无逐笔Level2分档与主买主卖方向,仅以分时段成交量代理连续竞价占比;风险剔除方法为论文可迁移机制,与数据分档无关"
+  }
+}

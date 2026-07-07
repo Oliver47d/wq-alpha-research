@@ -1,0 +1,38 @@
+{
+  "template_id": "ashare_value_reversal_combo",
+  "description": "A股低估值+反转组合因子：论文核心结论——‘低估值+反转’因子组合在各种市场状态下都能筛出显著强于市场的股票，相比基准有极显著优势。混合过去累计收益反转信号与低估值信号(账面市值比/盈利收益率)，两者互补。",
+  "skeleton": "{weight_rev} * group_rank(-ts_sum(returns, {window}), {group}) + {weight_val} * group_rank({val_numerator} / {val_denominator}, {group})",
+  "field_pairs": [
+    {"name": "bm", "val_numerator": "bookvalue_ps", "val_denominator": "close"},
+    {"name": "ey", "val_numerator": "eps", "val_denominator": "close"},
+    {"name": "sp", "val_numerator": "sales", "val_denominator": "cap"}
+  ],
+  "param_ranges": {
+    "weight_rev": [0.5, 0.6],
+    "weight_val": [0.4, 0.5],
+    "window": [21, 63],
+    "group": ["industry", "subindustry"],
+    "decay": [4],
+    "truncation": [0.08]
+  },
+  "default_settings": {
+    "instrumentType": "EQUITY",
+    "region": "USA",
+    "universe": "TOP3000",
+    "delay": 1,
+    "decay": 4,
+    "neutralization": "SUBINDUSTRY",
+    "truncation": 0.08,
+    "pasteurization": "ON",
+    "nanHandling": "ON",
+    "unitHandling": "VERIFY"
+  },
+  "hypothesis": "海通(2012)第3节：‘低估值+反转’组合筛出的股票在牛市/熊市/震荡市均明显强于市场，相对中证800有极显著优势且可容纳约1亿资金。低估值(高账面市值比/盈利收益率)提供安全边际，反转提供择时，二者互补降低单一因子回撤。",
+  "source": "海通证券《选股因子研究系列(一)：A股市场的动量反转效应研究》(2012)",
+  "expected_correlation": "反转分量与动量类负相关，估值分量与盈利质量类低相关，组合整体分散价值高",
+  "failure_risks": {
+    "LOW_SHARPE": "价值因子在美股近年偏弱，可能拖累组合；权重偏向反转(0.5-0.6)缓解",
+    "HIGH_CORR": "估值分量可能与现有bookvalue_ps/close模板相关，注意去重",
+    "DIV_ZERO": "close/cap理论不为0，估值比值安全"
+  }
+}

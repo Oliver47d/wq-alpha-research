@@ -1,0 +1,38 @@
+{
+  "template_id": "portable_alpha_graft",
+  "description": "Portable Alpha 策略嫁接因子：论文核心思想——某些因子有超额收益但受限于幅度或回撤不宜单独运行，可借鉴Portable Alpha把其超额收益低权重嫁接到已有强策略上，在不显著增加换手与波动的前提下增强收益。本模板以强盈利质量因子为主(base)，低权重嫁接一个低相关的增强信号(overlay)。",
+  "skeleton": "{base_weight} * group_rank(ts_rank({base_num} / {base_den}, {window}), {group}) + {overlay_weight} * group_rank(ts_rank({overlay_num} / {overlay_den}, {window}), {group})",
+  "field_pairs": [
+    {"name": "roe_ep", "base_num": "operating_income", "base_den": "equity", "overlay_num": "eps", "overlay_den": "close"},
+    {"name": "roe_bm", "base_num": "operating_income", "base_den": "equity", "overlay_num": "bookvalue_ps", "overlay_den": "close"},
+    {"name": "roe_sp", "base_num": "operating_income", "base_den": "equity", "overlay_num": "sales", "overlay_den": "cap"}
+  ],
+  "param_ranges": {
+    "base_weight": [0.7, 0.8],
+    "overlay_weight": [0.2, 0.3],
+    "window": [126, 252],
+    "group": ["industry", "subindustry"],
+    "decay": [4],
+    "truncation": [0.08]
+  },
+  "default_settings": {
+    "instrumentType": "EQUITY",
+    "region": "USA",
+    "universe": "TOP3000",
+    "delay": 1,
+    "decay": 4,
+    "neutralization": "SUBINDUSTRY",
+    "truncation": 0.08,
+    "pasteurization": "ON",
+    "nanHandling": "ON",
+    "unitHandling": "VERIFY"
+  },
+  "hypothesis": "海通(2015)第3节：Portable Alpha把一个稳定但幅度有限的超额收益源低权重嫁接到主策略，可在几乎不增加换手/回撤的情况下提升收益。本模板以强ROE质量因子为base(权重0.7-0.8)，低权重(0.2-0.3)叠加低相关的估值增强信号(overlay)，模拟策略嫁接以获得增量Alpha并分散风险。",
+  "source": "海通证券《选股因子系列研究(十)：基于机构持股信息的Portable Alpha策略增强》(2015)",
+  "expected_correlation": "整体接近主质量因子但因overlay低权重叠加而略有分散",
+  "failure_risks": {
+    "LOW_SHARPE": "overlay增益有限，可能只是主因子的稀释；权重偏向base缓解",
+    "HIGH_CORR": "base为ROE，可能与现有质量模板高相关，需靠overlay去重",
+    "DIV_ZERO": "close/cap/equity在TOP3000恒正，比值安全"
+  }
+}

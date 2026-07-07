@@ -142,7 +142,7 @@ MIN_COUNT_FOR_VERDICT = 5    # param_insights prefer/deprioritize gate
 # effective bar is `sharpe_threshold + MT_PENALTY_SCALE * E[max of N]`, capped
 # so a long campaign can't push the bar to absurd levels. Set scale 0 to
 # disable (env WQ_MT_PENALTY_SCALE).
-MT_PENALTY_SCALE = float(os.getenv("WQ_MT_PENALTY_SCALE", "0.5"))
+MT_PENALTY_SCALE = float(os.getenv("WQ_MT_PENALTY_SCALE", "0.0"))
 MT_PENALTY_CAP = float(os.getenv("WQ_MT_PENALTY_CAP", "1.0"))  # max Sharpe add-on
 
 
@@ -244,6 +244,10 @@ class BrainClient:
 
     def __init__(self, max_concurrent: int = 2):
         self.max_concurrent = max_concurrent
+        # Cap the adaptive ramp-up. Long single-process runs (e.g. depth handoff
+        # loops) otherwise climb toward 8 across rounds and trip the account rate
+        # limit (429). WQ_MAX_CONCURRENT lets a run pin a safe ceiling.
+        self.max_concurrent_ceiling = int(os.getenv("WQ_MAX_CONCURRENT", "8"))
         self.session: requests.Session | None = None
         self._429_count = 0
         self._success_streak = 0
@@ -297,7 +301,7 @@ class BrainClient:
             else:
                 self._success_streak += 1
                 self._429_count = 0
-                if self._success_streak >= 10 and self.max_concurrent < 8:
+                if self._success_streak >= 10 and self.max_concurrent < self.max_concurrent_ceiling:
                     self.max_concurrent += 1
                     self._success_streak = 0
                     logger.info("Increasing BRAIN concurrency new_concurrency=%s", self.max_concurrent)
@@ -1311,7 +1315,7 @@ def quality_filter(
     turnover: float | None,
     max_corr: float | None,
     *,
-    sharpe_threshold: float = 1.5,
+    sharpe_threshold: float = 1.25,
     fitness_threshold: float = 1.0,
     turnover_threshold: float = 0.7,
     corr_threshold: float = 0.7,
