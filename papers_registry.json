@@ -60,31 +60,43 @@
       "locator": "papers/12. “量”与“价”的结合.pdf",
       "title": "“量”与“价”的结合",
       "type": "research_report",
-      "status": "unread"
+      "status": "consumed",
+      "request_date": "2026-07-07T10:12:59.123352+00:00",
+      "read_date": "2026-07-07T10:20:00+00:00",
+      "extracted_templates": [
+        "price_turnover_correlation.json",
+        "price_turnover_corr_residualized.json"
+      ],
+      "extraction_round": 5,
+      "notes": "从《选股因子系列研究(十二)——“量”与“价”的结合》(海通2016)抽取核心机制:量价相关性 = 过去半个月复权收盘价与日换手率的Pearson时序相关系数,方向为‘低相关(量价背离/放量下跌)做多、高相关(量价同向/放量上涨)做空’,故因子取负号。price_turnover_correlation.json复现主信号(-ts_corr(close, volume/sharesout, 10~20)),window取半个月(约10日)及20日稳健性对照;price_turnover_corr_residualized.json复现论文第2.5节截面回归取残差,显式减去市值(-log(cap))、反转(-ts_sum(returns))、换手率(ts_mean(volume/sharesout))三项风险暴露(权重0.2-0.3)。数据说明:WQ USA无A股换手率字段,以volume/sharesout代理日换手率;无逐笔量价形态细分,仅复现可迁移的相关性主机制。与既有volume_price_correlation.json区分:后者用returns/volume且无负号,变量与方向均不同,本组模板更贴合原文。两模板均已通过expand_template+FieldValidator展开为合法FASTEXPR。"
     },
     "src_006": {
       "locator": "papers/13. 因子大讲坛.pdf",
       "title": "因子大讲坛",
       "type": "research_report",
-      "status": "unread"
+      "status": "agent_requested",
+      "request_date": "2026-07-07T11:17:21.517868+00:00"
     },
     "src_007": {
       "locator": "papers/14. 交易行为的波动和股票预期收益.pdf",
       "title": "交易行为的波动和股票预期收益",
       "type": "research_report",
-      "status": "unread"
+      "status": "agent_requested",
+      "request_date": "2026-07-07T12:45:53.790004+00:00"
     },
     "src_008": {
       "locator": "papers/15. 选股因子空头收益的转化.pdf",
       "title": "选股因子空头收益的转化",
       "type": "research_report",
-      "status": "unread"
+      "status": "agent_requested",
+      "request_date": "2026-07-07T14:16:24.793423+00:00"
     },
     "src_009": {
       "locator": "papers/16. “博彩型”股票的预期收益.pdf",
       "title": "“博彩型”股票的预期收益",
       "type": "research_report",
-      "status": "unread"
+      "status": "agent_requested",
+      "request_date": "2026-07-08T13:02:24.999985+00:00"
     },
     "src_010": {
       "locator": "papers/17. 选股因子的正交.pdf",
@@ -545,7 +557,7 @@
   },
   "stats": {
     "total": 85,
-    "consumed": 4,
-    "remaining": 81
+    "consumed": 5,
+    "remaining": 80
   }
 }

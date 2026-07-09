@@ -1,0 +1,35 @@
+{
+  "template_id": "price_turnover_correlation",
+  "description": "量价相关性因子(论文核心复现)：过去半个月股票复权收盘价与日换手率的Pearson时序相关系数。论文将短周期量价走势分为量价背离(低相关)与量价同向(高相关),核心发现——量价背离(尤其放量下跌)预示后市高收益,量价同向(尤其放量上涨)预示后市低收益,故因子取相关系数的负号(低相关→做多)。半个月(约10日)窗口下多空年化29%、IR 2.55、胜率72%,空头效应强(空头贡献约70%收益)。",
+  "skeleton": "-group_rank(ts_corr({price}, {turnover}, {window}), {group})",
+  "field_pairs": [
+    {"name": "close_turnover", "price": "close", "turnover": "(volume / sharesout)"}
+  ],
+  "param_ranges": {
+    "window": [10, 20],
+    "group": ["industry", "subindustry"],
+    "decay": [4],
+    "truncation": [0.08]
+  },
+  "default_settings": {
+    "instrumentType": "EQUITY",
+    "region": "USA",
+    "universe": "TOP3000",
+    "delay": 1,
+    "decay": 4,
+    "neutralization": "SUBINDUSTRY",
+    "truncation": 0.08,
+    "pasteurization": "ON",
+    "nanHandling": "ON",
+    "unitHandling": "VERIFY"
+  },
+  "hypothesis": "海通(2016)选股因子系列十二:短周期内量或价的趋势性更强,量价结合可用价格-换手率相关性衡量。表1显示按相关性分10组存在单调超额收益,第1组(低相关)超额+0.23%、第10组(高相关)超额-0.83%,多空1.07%(T=6.94)。第3节归因:放量上涨(量价同向+前期高涨幅)因存量资金博弈下的资金追捧不可持续→后市走弱(贡献空头);放量下跌(量价背离+前期低涨幅)因下行压力充分释放→后市不差(贡献多头)。据此因子取ts_corr(close,turnover)的负号:相关性越低→越接近放量下跌→越应做多。窗口取半个月(约10日),因短窗口趋势性强、复杂度低;20日作稳健性对照。",
+  "source": "海通证券《选股因子系列研究(十二)——“量”与“价”的结合》(2016)",
+  "expected_correlation": "与市值因子略负相关(多头略大市值),与1个月反转正相关,与换手率正相关,与3个月反转低相关;与现有volume_price_correlation(用returns/volume且无负号)方向与变量均不同,应低相关;SUBINDUSTRY中性化后保留增量Alpha(FF模型剔除MKT/SMB/HML/UMD后Alpha约1.05%,T=6.82)",
+  "failure_risks": {
+    "LOW_SHARPE": "论文为A股半月调仓、双边0.3%费用的多空回测,美股delay=1日频与月频调仓下强度可能减弱;因子‘熊市强、牛市弱’,增量资金入市环境会失效",
+    "HIGH_CORR": "与反转/换手类因子正相关(论文自述),需SUBINDUSTRY中性化并配合residualized版本去重",
+    "DIV_ZERO": "换手率分母sharesout在TOP3000恒正,安全;ts_corr需price与turnover的event类型兼容,unitHandling=VERIFY把关",
+    "SIGN_RISK": "方向为关键:相关性低→做多(负号)。若unitHandling或平台方向约定不同需以IC符号校验"
+  }
+}

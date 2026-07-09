@@ -1,0 +1,38 @@
+{
+  "template_id": "price_turnover_corr_residualized",
+  "description": "风险剔除后的量价相关性因子(论文第2.5节复现)：论文明确量价相关性因子与市值负相关、与1个月反转正相关、与换手率正相关,通过截面回归取残差方式剔除市值/反转/换手/行业风险因子后,因子仍具显著正Alpha(FF模型Alpha约1.05%,T=6.82)。本模板在价格-换手率相关性主信号(取负号,低相关做多)基础上,显式减去市值、前期涨幅(反转)与换手率暴露,分离出风险中性的纯量价结合Alpha。",
+  "skeleton": "-group_rank(ts_corr({price}, {turnover}, {window}), {group}) - {size_w} * group_rank(-log(cap), {group}) - {rev_w} * group_rank(-ts_sum(returns, {window}), {group}) - {turn_w} * group_rank(ts_mean((volume / sharesout), {window}), {group})",
+  "field_pairs": [
+    {"name": "close_turnover_resid", "price": "close", "turnover": "(volume / sharesout)"}
+  ],
+  "param_ranges": {
+    "window": [10, 20],
+    "group": ["industry", "subindustry"],
+    "size_w": [0.2, 0.3],
+    "rev_w": [0.2, 0.3],
+    "turn_w": [0.2],
+    "decay": [4],
+    "truncation": [0.08]
+  },
+  "default_settings": {
+    "instrumentType": "EQUITY",
+    "region": "USA",
+    "universe": "TOP3000",
+    "delay": 1,
+    "decay": 4,
+    "neutralization": "SUBINDUSTRY",
+    "truncation": 0.08,
+    "pasteurization": "ON",
+    "nanHandling": "ON",
+    "unitHandling": "VERIFY"
+  },
+  "hypothesis": "海通(2016)第2.5节:corr_i = β_MktVal·MktVal + β_Rev1m·Rev1m + β_Rev3m·Rev3m + β_Turn·Turn + β_Ind·Ind,用截面回归残差剔除市值/反转/换手/行业。剔除后各分组在市值、流动性、反转上特征趋同,多空组合仍稳定且Alpha显著,证明量价相关性含独立于已知风险的增量信息。据此本模板在主信号(-ts_corr(close,turnover))上显式减去市值排名(-log(cap))、反转排名(-ts_sum(returns))与换手率排名,得到风险中性的纯量价结合信号,理论上更稳定、更可解释、与纯市值/反转/换手模板去相关。权重取0.2-0.3以保留量价主信号主导权,避免过度中性化削弱Alpha。",
+  "source": "海通证券《选股因子系列研究(十二)——“量”与“价”的结合》(2016)",
+  "expected_correlation": "已显式剔除市值/反转/换手暴露,与纯市值/反转/换手模板应低相关;与未中性化的price_turnover_correlation中高相关但更纯净",
+  "failure_risks": {
+    "LOW_SHARPE": "过度中性化会削弱主信号;size_w/rev_w/turn_w偏低(0.2-0.3)保留量价结合主导权;因子仍具‘熊市强牛市弱’环境依赖",
+    "HIGH_CORR": "主信号仍可能与price_turnover_correlation高相关,靠减去三风险分量分散",
+    "DIV_ZERO": "sharesout与cap在TOP3000恒正,log(cap)安全",
+    "SIGN_RISK": "主信号方向为负号(低相关做多),减项方向沿用其他residualized模板约定(市值取-log(cap)、反转取-ts_sum(returns)),需以IC符号校验"
+  }
+}

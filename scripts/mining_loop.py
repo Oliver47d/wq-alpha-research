@@ -63,6 +63,7 @@ from factor_gp import (  # noqa: E402
     _field_pool_by_category,
 )
 from factor_seeds import Seed, load_seeds  # noqa: E402
+from factor_gp_loop import scalar_fitness  # noqa: E402
 
 LESSONS_PATH = SKILL_DIR / "lessons.json"
 PAPERS_REGISTRY_PATH = SKILL_DIR / "papers_registry.json"
@@ -108,14 +109,24 @@ GP_SEED_POOL_SIZE = int(os.getenv("WQ_GP_SEED_POOL_SIZE", "40"))
 # GP has no param grid, so supply sane defaults here or the request 400s with
 # "This field is required."
 GP_DECAY = int(os.getenv("WQ_GP_DECAY", "4"))
+# GP-bred structures have no param grid, so unlike the template producer they
+# never explore decay. A fixed low decay (4) leaves turnover high, which caps
+# Fitness = Sharpe*sqrt(|Ret|/max(Turnover,0.125)) even when Sharpe passes the
+# 1.25 bar. Sample decay per child from a higher pool so breadth naturally tries
+# smoother, lower-turnover variants and lifts Fitness above 1.0.
+GP_DECAY_POOL = [int(x) for x in os.getenv("WQ_GP_DECAY_POOL", "8,16,22").split(",") if x.strip()]
 GP_NEUTRALIZATION = os.getenv("WQ_GP_NEUTRALIZATION", "SUBINDUSTRY")
+# Lever 3 Step B: penalty weight on |max_corr| when ranking GP parents. Kept
+# mild (1.0) vs. the standalone factor_gp_loop's 2.0 so a high-corr seed is
+# nudged down the parent pool without a strong Sharpe factor being buried.
+GP_CORR_LAMBDA = float(os.getenv("WQ_GP_CORR_LAMBDA", "1.0"))
 
 
-def _gp_settings() -> dict:
+def _gp_settings(decay: int = GP_DECAY) -> dict:
     """Full settings dict for a GP candidate: DEFAULT_SETTINGS + the two
     required fields BRAIN rejects the request without."""
     s = dict(DEFAULT_SETTINGS)
-    s["decay"] = GP_DECAY
+    s["decay"] = decay
     s["neutralization"] = GP_NEUTRALIZATION
     return s
 
@@ -461,11 +472,15 @@ def build_candidates_gp(lessons: dict) -> list[dict]:
     skip = _gp_skip_hashes(lessons)
     rng = random.Random()
 
-    # Parent pool: drop skip-listed structures, dedup, prefer higher-sharpe
-    # seeds (so breeding starts from the strongest real factors).
+    # Parent pool: drop skip-listed structures, dedup, prefer seeds with the
+    # best corr-penalized score (Lever 3 Step B). scalar_fitness =
+    # Sharpe - lambda*|max_corr| - mu*turnover, so high-Sharpe seeds that are
+    # highly correlated with existing factors sink in the ranking and breeding
+    # starts from lower-correlation blood. lambda kept mild (1.0, not the
+    # standalone GP loop's 2.0) so corr nudges rather than dominates Sharpe.
     parents: list[Seed] = []
     seen: set[str] = set()
-    for s in sorted(seeds, key=lambda x: -(x.metrics.get("sharpe") or 0.0)):
+    for s in sorted(seeds, key=lambda x: -scalar_fitness(x.metrics, corr_lambda=GP_CORR_LAMBDA)):
         if s.ast_hash in skip or s.ast_hash in seen:
             continue
         seen.add(s.ast_hash)
@@ -505,9 +520,10 @@ def build_candidates_gp(lessons: dict) -> list[dict]:
             continue
         if ast_hash:
             emitted.add(ast_hash)
+        gp_decay = rng.choice(GP_DECAY_POOL) if GP_DECAY_POOL else GP_DECAY
         candidates.append({
             "expression": expr,
-            "settings": _gp_settings(),
+            "settings": _gp_settings(gp_decay),
             # template_id doubles as the lessons aggregation key; use ast_hash so
             # GP-bred factors roll up by structure alongside the other producers.
             "template_id": ast_hash or "gp_unknown",
@@ -515,7 +531,7 @@ def build_candidates_gp(lessons: dict) -> list[dict]:
             "ast_hash": ast_hash,
             "source": "gp",
             "params": {
-                "decay": GP_DECAY,
+                "decay": gp_decay,
                 "neutralization": GP_NEUTRALIZATION,
             },
         })
@@ -792,6 +808,11 @@ def run_breadth_round(
                     if corr_list:
                         max_corr = max(abs(c.get("correlation", 0)) for c in corr_list)
                 logger.info("Correlation computed (local fallback) alpha_id=%s max_corr=%s active_compare_count=%s", alpha_id, max_corr, len(active_pnls))
+
+        # Persist max_corr so next round's GP seed pool can penalize high-corr
+        # parents (Lever 3 Step B). Stored even when None (unknown → 0 penalty).
+        if alpha_id and alpha_id in db["alphas"]:
+            db["alphas"][alpha_id]["max_corr"] = max_corr
 
         # Quality filter (#6: pass BRAIN's robustness checks so SUBMIT-grade
         # but non-robust alphas are demoted to OBSERVE rather than auto-submitted;

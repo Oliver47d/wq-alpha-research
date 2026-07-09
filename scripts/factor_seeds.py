@@ -99,7 +99,7 @@ def _seeds_from_alpha_db(
     db = json.loads(path.read_text(encoding="utf-8")).get("alphas", {})
     seeds, skipped = [], 0
     for aid, rec in db.items():
-        metrics = {k: rec.get(k) for k in ("status", "sharpe", "fitness", "turnover")}
+        metrics = {k: rec.get(k) for k in ("status", "sharpe", "fitness", "turnover", "max_corr")}
         s = _make_seed(rec.get("expression"), "alpha_db", aid, metrics, fv, fcats)
         if s:
             seeds.append(s)

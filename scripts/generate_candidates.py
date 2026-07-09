@@ -118,12 +118,16 @@ KNOWN_OPERATORS = {
     "zscore", "scale", "winsorize", "normalize", "quantile",
     # time-series
     "ts_rank", "ts_mean", "ts_std_dev", "ts_delta", "ts_delay", "ts_sum",
-    "ts_max", "ts_min", "ts_corr", "ts_covariance", "ts_regression",
-    "ts_decay_linear", "ts_count", "ts_zscore", "ts_product", "ts_argmax",
-    "ts_argmin", "ts_scale",
+    "ts_corr", "ts_covariance", "ts_regression",
+    "ts_decay_linear", "ts_zscore", "ts_product", "ts_arg_max",
+    "ts_arg_min", "ts_scale",
+    "ts_backfill", "ts_av_diff", "ts_count_nans", "ts_quantile",
+    "last_diff_value", "days_from_last_change",
     # arithmetic / logic
     "abs", "log", "sign", "power", "sqrt", "max", "min", "if_else",
     "add", "subtract", "multiply", "divide",
+    "signed_power", "inverse", "reverse", "hump",
+    "group_scale", "trade_when",
 }
 
 # Price/volume + grouping builtins: valid tokens that are NOT in the data-field
