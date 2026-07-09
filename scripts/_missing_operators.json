@@ -1,0 +1,147 @@
+{
+ "densify": {
+  "category": "Arithmetic",
+  "definition": "densify(x)",
+  "description": "Converts a grouping field of many buckets into lesser number of only available buckets so as to make working with grouping fields computationally efficient"
+ },
+ "inverse": {
+  "category": "Arithmetic",
+  "definition": "inverse(x)",
+  "description": "1 / x"
+ },
+ "reverse": {
+  "category": "Arithmetic",
+  "definition": "reverse(x)",
+  "description": " - x"
+ },
+ "signed_power": {
+  "category": "Arithmetic",
+  "definition": "signed_power(x, y)",
+  "description": "x raised to the power of y such that final result preserves sign of x"
+ },
+ "group_backfill": {
+  "category": "Group",
+  "definition": "group_backfill(x, group, d, std = 4.0)",
+  "description": "Fills missing (NaN) values for instruments within the same group by calculating a winsorized mean of all non-NaN values over the past d days. The winsorized mean is computed by trimming extreme values based on a specified standard deviation multiplier (std, default 4.0)."
+ },
+ "group_scale": {
+  "category": "Group",
+  "definition": "group_scale(x, group)",
+  "description": "Normalizes values within each group to a range between 0 and 1, making data comparable across different groups."
+ },
+ "and": {
+  "category": "Logical",
+  "definition": "and(input1, input2)",
+  "description": "Returns 1 ('true') if both inputs are 1 ('true'). Otherwise, returns 0 ('false')."
+ },
+ "equal": {
+  "category": "Logical",
+  "definition": "input1 == input2",
+  "description": "Returns 1 ('true') if input1 and input2 are the same. Otherwise, returns 0 ('false')."
+ },
+ "greater": {
+  "category": "Logical",
+  "definition": "input1 > input2",
+  "description": "Returns 1 ('true') if input1 is a larger than input2. Otherwise, returns 0 ('false')."
+ },
+ "greater_equal": {
+  "category": "Logical",
+  "definition": "input1 >= input2",
+  "description": "Returns 1 ('true') if input1 is a larger or the same as input2. Otherwise, returns 0 ('false')."
+ },
+ "is_nan": {
+  "category": "Logical",
+  "definition": "is_nan(input)",
+  "description": "If (input == NaN) return 1 else return 0"
+ },
+ "less": {
+  "category": "Logical",
+  "definition": "input1 < input2",
+  "description": "Returns 1 ('true') if input1 is a smaller than input2. Otherwise, returns 0 ('false')."
+ },
+ "less_equal": {
+  "category": "Logical",
+  "definition": "input1 <= input2",
+  "description": "Returns 1 ('true') if input1 is a smaller or the same as input2. Otherwise, returns 0 ('false')."
+ },
+ "not": {
+  "category": "Logical",
+  "definition": "not(x)",
+  "description": "Returns the logical negation of x. Returns 0 when x is 1 (‘true’) and 1 when x is 0 (‘false’)."
+ },
+ "not_equal": {
+  "category": "Logical",
+  "definition": "input1!= input2",
+  "description": "Returns 1 ('true') if input1 and input2 are different numbers. Otherwise, returns 0 ('false')."
+ },
+ "or": {
+  "category": "Logical",
+  "definition": "or(input1, input2)",
+  "description": "Returns 1 if either input is true (either input1 or input2 has a value of 1), otherwise it returns 0."
+ },
+ "days_from_last_change": {
+  "category": "Time Series",
+  "definition": "days_from_last_change(x)",
+  "description": "Calculates the number of days since the last change in the value of a given variable."
+ },
+ "hump": {
+  "category": "Time Series",
+  "definition": "hump(x, hump = 0.01)",
+  "description": "Limits amount and magnitude of changes in input (thus reducing turnover)"
+ },
+ "kth_element": {
+  "category": "Time Series",
+  "definition": "kth_element(x, d, k, ignore=“NaN”)",
+  "description": "Returns the K-th value from a time series by looking back over a specified number of (‘d’) days, with the option to ignore certain values. Commonly used for backfilling missing data."
+ },
+ "last_diff_value": {
+  "category": "Time Series",
+  "definition": "last_diff_value(x, d)",
+  "description": "Returns the most recent value of x from the past d days that is different from the current value of x."
+ },
+ "ts_av_diff": {
+  "category": "Time Series",
+  "definition": "ts_av_diff(x, d)",
+  "description": "Calculates the difference between a value and its mean over a specified period, ignoring NaN values in the mean calculation. In short, it returns x – ts_mean(x, d) with NaNs ignored."
+ },
+ "ts_backfill": {
+  "category": "Time Series",
+  "definition": "ts_backfill(x,lookback = d, k=1)",
+  "description": "Replaces missing (NaN) values in a time series with the most recent valid value from a specified lookback window, improving data coverage and reducing risk from missing data."
+ },
+ "ts_count_nans": {
+  "category": "Time Series",
+  "definition": "ts_count_nans(x ,d)",
+  "description": "Counts the number of missing (NaN) values in a data series over a specified number of days."
+ },
+ "ts_quantile": {
+  "category": "Time Series",
+  "definition": "ts_quantile(x,d, driver=\"gaussian\" )",
+  "description": "Calculates the ts_rank of the input and transforms it using the inverse cumulative distribution function (quantile function) of a specified probability distribution (default: Gaussian/normal). This helps to normalize or reshape the distribution of your data over a rolling window."
+ },
+ "ts_step": {
+  "category": "Time Series",
+  "definition": "ts_step(1)",
+  "description": "Returns a counter of days, incrementing by one each day."
+ },
+ "bucket": {
+  "category": "Transformational",
+  "definition": "bucket(rank(x), range=“0, 1, 0.1”, skipBoth=False, NaNGroup=False)\r\nor\r\nbucket(rank(x), buckets = “2,5,6,7,10”, skipBoth=False, NaNGroup=False)",
+  "description": "The bucket operator creates custom groups by dividing data into buckets (ranges) based on ranked values of any data field. These buckets can then be used with group operators like group_neutralize, group_rank, group_zscore etc."
+ },
+ "trade_when": {
+  "category": "Transformational",
+  "definition": "trade_when(x, y, z)",
+  "description": "The trade_when operator changes Alpha values only when a specific condition is met, keeps previous values otherwise, and can close positions by assigning NaN under an exit condition. It is useful for reducing turnover and controlling when trades are executed."
+ },
+ "vec_avg": {
+  "category": "Vector",
+  "definition": "vec_avg(x)",
+  "description": "Calculates the mean (average) of all elements in a vector field for each instrument and date, converting vector data to a single matrix value."
+ },
+ "vec_sum": {
+  "category": "Vector",
+  "definition": "vec_sum(x)",
+  "description": "Calculates the sum of all values in a vector field."
+ }
+}

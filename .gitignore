@@ -22,4 +22,5 @@ __pycache__/
 venv/
 *.bak
 mining_run_*.log
+gp_*.log
 signal_list.md
